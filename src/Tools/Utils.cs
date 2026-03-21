@@ -47,6 +47,13 @@ public class Utils
         {
             ps.AddScript(script);
             var results = ps.Invoke();
+            if (ps.HadErrors)
+            {
+                foreach (var error in ps.Streams.Error)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[PowerShell Error] {error}");
+                }
+            }
             return results;
         }
     }

@@ -2690,7 +2690,7 @@ namespace ExHyperV.ViewModels
                 }
                 else
                 {
-                    ShowSnackbar(Properties.Resources.Error_Storage_RemoveFail, Properties.Resources.Error_Gpu_RemoveFail, ControlAppearance.Danger, SymbolRegular.ErrorCircle24);
+                    ShowSnackbar(Properties.Resources.Error_Common_OpFail, Properties.Resources.Error_Gpu_RemoveFail, ControlAppearance.Danger, SymbolRegular.ErrorCircle24);
                 }
             }
             catch (Exception ex)
@@ -2882,9 +2882,15 @@ namespace ExHyperV.ViewModels
                                     task.Description = string.Format(Properties.Resources.Msg_Gpu_ForceOff, state);
                                     AppendLog(task.Description);
                                     await _powerService.ExecuteControlActionAsync(SelectedVm.Name, "TurnOff");
+                                    var powerOffDeadline = DateTime.UtcNow.AddMinutes(2);
                                     while (!(await _vmGpuService.IsVmPoweredOffAsync(SelectedVm.Name)).IsOff)
                                     {
-                                        await Task.Delay(100);
+                                        if (DateTime.UtcNow > powerOffDeadline)
+                                        {
+                                            AppendLog("Timeout waiting for VM to power off.");
+                                            return;
+                                        }
+                                        await Task.Delay(500);
                                     }
                                 }
                                 task.Description = Properties.Resources.Msg_Gpu_Off;
@@ -2918,7 +2924,13 @@ namespace ExHyperV.ViewModels
                             await Task.Delay(100);
                             var currentAdapters = await _vmGpuService.GetVmGpuAdaptersAsync(SelectedVm.Name);
                             // 记录下来，以便后续步骤（如驱动安装）失败时删除
-                            _currentProcessingGpuAdapterId = currentAdapters.LastOrDefault().Id;
+                            var lastAdapter = currentAdapters.LastOrDefault();
+                            if (lastAdapter == default)
+                            {
+                                AppendLog("Failed to verify GPU partition adapter assignment.");
+                                return;
+                            }
+                            _currentProcessingGpuAdapterId = lastAdapter.Id;
                             break;
 
                         case GpuTaskType.Driver:
@@ -2997,10 +3009,17 @@ namespace ExHyperV.ViewModels
                     AppendLog(string.Format(Properties.Resources.Error_Format_StageExc, task.Name, ex.Message));
                     if (!string.IsNullOrEmpty(_currentProcessingGpuAdapterId))
                     {
-                        AppendLog(Properties.Resources.Error_Gpu_LinuxRollback); 
-                        await _vmGpuService.RemoveGpuPartitionAsync(SelectedVm.Name, _currentProcessingGpuAdapterId);
-                        _currentProcessingGpuAdapterId = null;
-                        AppendLog(Properties.Resources.Msg_Gpu_PartitionRemoved);
+                        try
+                        {
+                            AppendLog(Properties.Resources.Error_Gpu_LinuxRollback);
+                            await _vmGpuService.RemoveGpuPartitionAsync(SelectedVm.Name, _currentProcessingGpuAdapterId);
+                            _currentProcessingGpuAdapterId = null;
+                            AppendLog(Properties.Resources.Msg_Gpu_PartitionRemoved);
+                        }
+                        catch (Exception rollbackEx)
+                        {
+                            AppendLog($"[WARNING] Rollback failed: {rollbackEx.Message}");
+                        }
                     }
 
                     ShowSnackbar(Properties.Resources.Error_Common_OpFail, string.Format(Properties.Resources.Error_Format_StageError, task.Name), ControlAppearance.Danger, SymbolRegular.ErrorCircle24);

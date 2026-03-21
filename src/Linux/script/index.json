@@ -5,5 +5,12 @@
     "Description": "针对 Ubuntu 22.04 的官方部署脚本。",
     "Author": "Justsenger",
     "Version": "1.0.8"
+  },
+  {
+    "FileName": "Fedora-44-Official.sh",
+    "Name": "Fedora-44-Official",
+    "Description": "GPU-PV deployment script for Fedora 44 (also works on Fedora 41+)",
+    "Author": "ExHyperV Community",
+    "Version": "1.0.0"
   }
 ]

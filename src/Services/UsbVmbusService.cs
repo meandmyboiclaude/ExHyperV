@@ -49,7 +49,7 @@ namespace ExHyperV.Services
 
         public UsbVmbusService()
         {
-            try { Process.GetCurrentProcess().PriorityClass = ProcessPriorityClass.RealTime; } catch { }
+            // Thread-level priority on pump threads is sufficient; process-level RealTime removed to avoid OS scheduler starvation
         }
 
         private void Log(string msg) => Debug.WriteLine($"[ExHyperV-USB] [{DateTime.Now:HH:mm:ss.fff}] {msg}");

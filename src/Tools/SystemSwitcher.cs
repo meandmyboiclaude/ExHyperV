@@ -87,7 +87,9 @@ namespace ExHyperV.Tools
 
                 ret = RegReplaceKey(HKEY_LOCAL_MACHINE, "SYSTEM", hiveFile, backupFile);
 
-                return ret == 0 || ret == 5 ? "SUCCESS" : $"替换失败:{ret}";
+                if (ret == 0) return "SUCCESS";
+                if (ret == 5) return "ACCESS_DENIED: Insufficient privileges to replace registry hive";
+                return $"Registry replacement failed with error code: {ret}";
             }
             catch (Exception ex) { return ex.Message; }
         }

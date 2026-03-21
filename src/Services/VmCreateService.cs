@@ -75,7 +75,7 @@ namespace ExHyperV.Services
                         switchParam = $"-SwitchName '{p.SwitchName}'";
                     }
 
-                    long memoryBytes = p.MemoryMb * 1024 * 1024;
+                    long memoryBytes = (long)p.MemoryMb * 1024L * 1024L;
                     string diskParam = p.DiskMode switch
                     {
                         0 => $"-NewVHDPath '{p.VhdPath}' -NewVHDSizeBytes {p.DiskSizeGb}GB",

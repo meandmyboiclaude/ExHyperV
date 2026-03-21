@@ -70,12 +70,13 @@ namespace ExHyperV.Tools
             {
                 ManagementObject job = new ManagementObject((string)outParams["Job"]);
                 job.Get();
-                while ((ushort)job["JobState"] == 4 || (ushort)job["JobState"] == 7)
+                var deadline = DateTime.UtcNow.AddMinutes(5);
+                while ((ushort)job["JobState"] == 4 && DateTime.UtcNow < deadline)
                 {
                     System.Threading.Thread.Sleep(500);
                     job.Get();
                 }
-                if ((ushort)job["JobState"] != 10)
+                if ((ushort)job["JobState"] != 7)
                 {
                     throw new Exception(string.Format(Properties.Resources.HcsManager_1, (ushort)job["JobState"], job["ErrorDescription"]));
                 }

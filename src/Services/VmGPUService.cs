@@ -63,7 +63,7 @@ namespace ExHyperV.Services
         {
             try
             {
-                Process process = new()
+                using Process process = new()
                 {
                     StartInfo =
                     {
@@ -76,6 +76,8 @@ namespace ExHyperV.Services
                     }
                 };
                 process.Start();
+                process.StandardOutput.ReadToEnd();
+                process.StandardError.ReadToEnd();
                 process.WaitForExit();
                 return process.ExitCode;
             }
@@ -690,9 +692,9 @@ namespace ExHyperV.Services
 
         public Task<bool> RemoveGpuPartitionAsync(string vmName, string adapterId)
         {
-            return Task.Run(() =>
+            return Task.Run(async () =>
             {
-                var results = Utils.Run2($@"Remove-VMGpuPartitionAdapter -VMName '{vmName}' -AdapterId '{adapterId}' -Confirm:$false");
+                var results = await Utils.Run2($@"Remove-VMGpuPartitionAdapter -VMName '{vmName}' -AdapterId '{adapterId}' -Confirm:$false");
                 if (results != null)
                 {
                     string cleanupNotesScript = $@"
@@ -832,6 +834,10 @@ return 'OK'
                 }))
                 {
                     await p.WaitForExitAsync();
+                    if (p.ExitCode >= 8)
+                    {
+                        Log($"[WARNING] Driver file sync encountered errors (robocopy exit code: {p.ExitCode})");
+                    }
                 }
 
                 PromoteRegistryDefinedFiles(assignedDriveLetter); // 微软注册表文件提取
@@ -839,7 +845,11 @@ return 'OK'
                 if (gpuManu.Contains("NVIDIA", StringComparison.OrdinalIgnoreCase))
                 {
                     Log(Properties.Resources.Msg_Gpu_InjectingReg);
-                    NvidiaReg(assignedDriveLetter);
+                    string regResult = NvidiaReg(assignedDriveLetter);
+                    if (regResult != "OK")
+                    {
+                        Log($"[WARNING] NVIDIA registry injection issue: {regResult}");
+                    }
                     PromoteNvidiaFiles(assignedDriveLetter);
                 }
                 else if (gpuManu.Contains("Intel", StringComparison.OrdinalIgnoreCase))
@@ -1251,7 +1261,8 @@ return 'OK'
                 string targetText = @"HKEY_LOCAL_MACHINE\OfflineSystem\ControlSet001\Services\nvlddmkm";
                 string regContent = File.ReadAllText(tempRegFile);
                 regContent = regContent.Replace(originalText, targetText);
-                regContent = regContent.Replace("DriverStore", "HostDriverStore");
+                regContent = regContent.Replace("\\DriverStore\\", "\\HostDriverStore\\");
+                regContent = regContent.Replace("/DriverStore/", "/HostDriverStore/");
                 File.WriteAllText(tempRegFile, regContent);
                 ExecuteCommand($@"reg import ""{tempRegFile}""");
 

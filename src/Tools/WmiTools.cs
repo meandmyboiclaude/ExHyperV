@@ -86,7 +86,8 @@ public static class WmiTools
             var scope = new ManagementScope(scopeStr);
             using var job = new ManagementObject(scope, new ManagementPath(jobPath), null);
 
-            while (true)
+            var deadline = DateTime.UtcNow.AddMinutes(5);
+            while (DateTime.UtcNow < deadline)
             {
                 job.Get();
                 ushort jobState = (ushort)job["JobState"];
@@ -101,6 +102,7 @@ public static class WmiTools
 
                 Thread.Sleep(500);
             }
+            return (false, "WMI job timed out after 5 minutes");
         }
         catch (Exception ex)
         {
