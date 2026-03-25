@@ -12,5 +12,12 @@
     "Description": "GPU-PV deployment script for Fedora 44 (also works on Fedora 41+)",
     "Author": "ExHyperV Community",
     "Version": "1.0.0"
+  },
+  {
+    "FileName": "CachyOS-Official.sh",
+    "Name": "CachyOS-Official",
+    "Description": "GPU-PV deployment script for CachyOS (Arch-based, supports Clang-built kernels)",
+    "Author": "ExHyperV Community",
+    "Version": "1.0.0"
   }
 ]
