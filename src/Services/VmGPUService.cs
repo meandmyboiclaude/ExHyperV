@@ -20,7 +20,7 @@ namespace ExHyperV.Services
             public string Path { get; set; }        // 虚拟文件的VHDX 路径
             public int PhysicalDiskNumber { get; set; } // 物理硬盘的 Disk Number (e.g. 0, 1, 2)
         }
-        private const string ScriptBaseUrl = "https://raw.githubusercontent.com/Justsenger/ExHyperV/main/src/Linux/script/";
+        private const string ScriptBaseUrl = "https://raw.githubusercontent.com/meandmyboiclaude/ExHyperV/main/src/Linux/script/";
 
         // PowerShell 脚本常量
         private const string GetGpuWmiInfoScript = "Get-CimInstance -Class Win32_VideoController | select PNPDeviceID,name,AdapterCompatibility,DriverVersion";
