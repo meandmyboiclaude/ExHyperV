@@ -39,18 +39,12 @@ jobs:
           dotnet restore src/ExHyperV.csproj
           $msbuild = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -requires Microsoft.Component.MSBuild -find MSBuild\**\Bin\MSBuild.exe | Select-Object -First 1
           & $msbuild src/ExHyperV.csproj /p:Configuration=Release /p:PublishDir=../publish_portable/ /p:SelfContained=false /t:Publish
-          dotnet restore src/ExHyperV.csproj -r win-arm64
-          & $msbuild src/ExHyperV.csproj /p:Configuration=Release /p:PublishDir=../temp_arm64/ /p:SelfContained=false /p:RuntimeIdentifier=win-arm64 /t:Publish
       - if: steps.check_tag.outputs.EXISTS == 'false'
         shell: pwsh
         run: |
           $ver = "${{ steps.get_version.outputs.VERSION }}"
           Copy-Item -Path "./publish_portable" -Destination "./dist_x64" -Recurse
           Compress-Archive -Path ./dist_x64/* -DestinationPath "ExHyperV_$($ver)_x64.zip" -Force
-          Copy-Item -Path "./publish_portable" -Destination "./dist_arm64" -Recurse
-          Remove-Item "./dist_arm64/ExHyperV.exe" -Force
-          Copy-Item -Path "./temp_arm64/ExHyperV.exe" -Destination "./dist_arm64/ExHyperV.exe"
-          Compress-Archive -Path ./dist_arm64/* -DestinationPath "ExHyperV_$($ver)_arm64.zip" -Force
       - if: steps.check_tag.outputs.EXISTS == 'false'
         uses: softprops/action-gh-release@v2
         with:
@@ -58,7 +52,6 @@ jobs:
           name: "V${{ steps.get_version.outputs.VERSION }}"
           files: |
             ExHyperV_${{ steps.get_version.outputs.VERSION }}_x64.zip
-            ExHyperV_${{ steps.get_version.outputs.VERSION }}_arm64.zip
           generate_release_notes: true
           draft: false
           prerelease: false
