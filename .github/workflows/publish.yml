@@ -64,12 +64,3 @@ jobs:
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - name: Submit to Winget
-        if: steps.check_tag.outputs.EXISTS == 'false'
-        uses: vedantmgoyal2009/winget-releaser@v2
-        with:
-          identifier: Justsenger.ExHyperV
-          installers-regex: '\.zip$'
-          token: ${{ secrets.WINGET_TOKEN }}
-          version: ${{ steps.get_version.outputs.VERSION }}
-          release-tag: V${{ steps.get_version.outputs.VERSION }}

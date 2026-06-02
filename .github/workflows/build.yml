@@ -1,0 +1,40 @@
+name: Build
+
+# Builds the Windows .exe on every push / PR and uploads it as a downloadable
+# artifact. Unlike publish.yml (which only runs on a version bump and creates a
+# GitHub Release), this gives a buildable .exe for every change and acts as
+# continuous compile-verification.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore
+        run: dotnet restore src/ExHyperV.csproj
+
+      - name: Publish (x64, framework-dependent)
+        shell: pwsh
+        run: |
+          $msbuild = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -requires Microsoft.Component.MSBuild -find MSBuild\**\Bin\MSBuild.exe | Select-Object -First 1
+          & $msbuild src/ExHyperV.csproj /p:Configuration=Release /p:PublishDir=../publish_x64/ /p:SelfContained=false /t:Publish
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ExHyperV-x64-${{ github.sha }}
+          path: publish_x64/
+          if-no-files-found: error
