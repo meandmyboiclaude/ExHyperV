@@ -19,7 +19,8 @@
 	<ItemGroup>
 		<PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
 		<PackageReference Include="Microsoft.Xaml.Behaviors.Wpf" Version="1.1.142" />
-		<PackageReference Include="RoyalApps.Community.Rdp.WinForms" Version="1.4.1" />
+		<!-- Pinned to 1.4.0: 1.4.1+ targets net10.0-windows only and won't restore on net8.0-windows. -->
+		<PackageReference Include="RoyalApps.Community.Rdp.WinForms" Version="1.4.0" />
 		<PackageReference Include="SSH.NET" Version="2025.1.0" />
 		<PackageReference Include="System.Management" Version="10.0.8" />
 		<!-- WPF-UI pinned to 4.0.3 to match the trimmed runtime libs/Wpf.Ui.dll (AssemblyVersion 4.0.0.0)
