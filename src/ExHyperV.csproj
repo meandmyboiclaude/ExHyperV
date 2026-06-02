@@ -7,7 +7,7 @@
 		<ImplicitUsings>enable</ImplicitUsings>
 		<Nullable>enable</Nullable>
 		<ApplicationIcon>Assets\Icon.ico</ApplicationIcon>
-		<Version>1.5.0-Beta</Version>
+		<Version>1.6.0</Version>
 		<IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
 		<WpfUiGenerateDiagnosticMessages>False</WpfUiGenerateDiagnosticMessages>
 		<SatelliteResourceLanguages>en;zh-Hans</SatelliteResourceLanguages>
@@ -17,11 +17,14 @@
 		<AllowUnsafeBlocks>True</AllowUnsafeBlocks>
 	</PropertyGroup>
 	<ItemGroup>
-		<PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.0" />
-		<PackageReference Include="Microsoft.Xaml.Behaviors.Wpf" Version="1.1.135" />
-		<PackageReference Include="RoyalApps.Community.Rdp.WinForms" Version="1.4.0" />
-		<PackageReference Include="SSH.NET" Version="2024.1.0" />
+		<PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
+		<PackageReference Include="Microsoft.Xaml.Behaviors.Wpf" Version="1.1.142" />
+		<PackageReference Include="RoyalApps.Community.Rdp.WinForms" Version="1.4.1" />
+		<PackageReference Include="SSH.NET" Version="2025.1.0" />
 		<PackageReference Include="System.Management" Version="10.0.8" />
+		<!-- WPF-UI pinned to 4.0.3 to match the trimmed runtime libs/Wpf.Ui.dll (AssemblyVersion 4.0.0.0)
+		     that GodTierCleanupAfterPublish copies over the published dll. Bumping the package alone is a
+		     no-op at runtime; bumping requires re-trimming/replacing libs/Wpf.Ui.dll and a Windows smoke test. -->
 		<PackageReference Include="WPF-UI" Version="4.0.3" />
 		<Resource Include="Assets\**\*.*" />
 		<COMReference Include="IMAPI2FS">
