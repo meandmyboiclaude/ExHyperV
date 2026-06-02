@@ -548,18 +548,26 @@ if [ "$ENABLE_GRAPHICS" == "true" ]; then
     # Vulkan ICD for dozen (D3D12-based Vulkan)
     update_env "VK_ICD_FILENAMES" "/usr/share/vulkan/icd.d/dzn_icd.x86_64.json"
 
-    if ! grep -q "GALLIUM_DRIVERS=d3d12" ~/.bashrc; then
-        cat >> ~/.bashrc <<EOF
+    # Write shell config for the real (non-root) user. The script runs under sudo,
+    # so ~ would expand to /root; resolve the invoking user instead.
+    TARGET_USER="${SUDO_USER:-$USER}"
+    TARGET_HOME=$(getent passwd "$TARGET_USER" | cut -d: -f6)
+    if [ -z "$TARGET_HOME" ]; then TARGET_HOME="$HOME"; fi
+    for rcfile in "$TARGET_HOME/.bashrc" "$TARGET_HOME/.zshrc"; do
+        if [ -f "$rcfile" ] && ! grep -q "GALLIUM_DRIVERS=d3d12" "$rcfile"; then
+            cat >> "$rcfile" <<EOF
 # GPU-PV Configuration
 export GALLIUM_DRIVERS=d3d12
 export DRI_PRIME=1
 export LIBVA_DRIVER_NAME=d3d12
 export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/dzn_icd.x86_64.json
 EOF
-    fi
+            chown "$TARGET_USER":"$(id -gn "$TARGET_USER")" "$rcfile" 2>/dev/null || true
+        fi
+    done
 
-    # Grant current user render permissions
-    sudo usermod -a -G video,render $USER
+    # Grant the real (non-root) user render permissions
+    usermod -a -G video,render "$TARGET_USER"
 
     # Hyper-V virtual GPU is usually card1, but many programs expect card0
     echo " -> Fix permissions and symlinks for /dev/dri..."
