@@ -128,13 +128,13 @@ namespace ExHyperV.Services
             {
                 status = adapterResp.Data[0].Status;
                 string ifIndex = adapterResp.Data[0].Index;
-                if (!string.IsNullOrEmpty(ifIndex))
+                if (int.TryParse(ifIndex, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var ifIndexNum))
                 {
                     var sw = System.Diagnostics.Stopwatch.StartNew();
                     while (sw.ElapsedMilliseconds < 2000)
                     {
                         var ipResp = await WmiApi.QueryCimAsync(
-                            $"SELECT IPAddress FROM MSFT_NetIPAddress WHERE InterfaceIndex = {ifIndex}",
+                            $"SELECT IPAddress FROM MSFT_NetIPAddress WHERE InterfaceIndex = {ifIndexNum}",
                             obj => obj["IPAddress"]?.ToString() ?? string.Empty,
                             WmiScope.StdCimV2);
                         if (ipResp.Success && ipResp.Data?.Count > 0)
@@ -279,7 +279,7 @@ namespace ExHyperV.Services
                 interfaceDescription = await ResolveInterfaceDescriptionAsync(externalAdapterElementName);
 
             // ICS（NAT）检测
-            var icsResponse = ComApi.GetIcsSourceAdapter(switchName);
+            var icsResponse = await ComApi.GetIcsSourceAdapterAsync(switchName);
             if (icsResponse.Success && icsResponse.Data != null)
             {
                 switchType = "NAT";

@@ -159,10 +159,14 @@ public class VmMemoryService
             }
             else if (memorySettings.BackingPageSize > 0 && memData.HasProperty("MaxMemoryBlocksPerNumaNode"))
             {
-                ulong current = (ulong)memData["MaxMemoryBlocksPerNumaNode"];
-                ulong corrected = (current / (ulong)alignment) * (ulong)alignment;
-                if (corrected == 0) corrected = (ulong)alignment;
-                memData["MaxMemoryBlocksPerNumaNode"] = corrected;
+                var raw = memData["MaxMemoryBlocksPerNumaNode"];
+                if (raw != null)
+                {
+                    ulong current = Convert.ToUInt64(raw);
+                    ulong corrected = (current / (ulong)alignment) * (ulong)alignment;
+                    if (corrected == 0) corrected = (ulong)alignment;
+                    memData["MaxMemoryBlocksPerNumaNode"] = corrected;
+                }
             }
 
             memData.TrySet("BackingType", memorySettings.BackingType);

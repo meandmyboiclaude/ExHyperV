@@ -289,7 +289,11 @@ public static class Win32Api
         {
             int type = 0, data = 0, size = 4;
             int queryRet = NativeMethods.RegQueryValueEx(hKey, valueName, nint.Zero, ref type, ref data, ref size);
-            return queryRet == 0 ? ApiResponse<int>.Ok(data) : ApiResponse<int>.Fail($"RegQueryValueEx failed: {valueName}", queryRet, ApiErrorSource.Win32);
+            if (queryRet != 0)
+                return ApiResponse<int>.Fail($"RegQueryValueEx failed: {valueName}", queryRet, ApiErrorSource.Win32);
+            if (type != NativeMethods.REG_DWORD || size != 4)
+                return ApiResponse<int>.Fail($"RegQueryValueEx: {valueName} is not a 4-byte REG_DWORD (type={type}, size={size})", 0, ApiErrorSource.Win32);
+            return ApiResponse<int>.Ok(data);
         }
         finally { NativeMethods.RegCloseKey(hKey); }
     }
@@ -380,6 +384,7 @@ internal static class NativeMethods
     public const uint KEY_READ = 0x20019;
     public const uint KEY_SET_VALUE = 0x0002;
     public const int REG_SZ = 1;
+    public const int REG_DWORD = 4;
 
     [DllImport("advapi32.dll", SetLastError = true)]
     public static extern bool OpenProcessToken(nint processHandle, uint desiredAccess, out nint tokenHandle);

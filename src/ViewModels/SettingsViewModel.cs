@@ -86,7 +86,10 @@ namespace ExHyperV.ViewModels
             {
                 Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
             }
-            catch{}
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Failed to open release page '{url}': {ex.Message}");
+            }
         }
         public string CopyrightInfo => "© 2026 | " + Utils.Author+ " | " + Utils.Version;
 

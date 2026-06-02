@@ -24,13 +24,17 @@ namespace ExHyperV.Services
             {
                 using var searcher = new ManagementObjectSearcher(
                     "SELECT Caption, OSArchitecture, Version FROM Win32_OperatingSystem");
-                foreach (ManagementObject obj in searcher.Get())
+                using var osCollection = searcher.Get();
+                foreach (ManagementObject obj in osCollection)
                 {
-                    osCaption = obj["Caption"]?.ToString()?.Replace("Microsoft ", "") ?? "N/A";
-                    osArch = obj["OSArchitecture"]?.ToString() ?? "N/A";
-                    string version = obj["Version"]?.ToString() ?? "";
-                    if (version.Length >= 5)
-                        osCaption = $"{osCaption} Build.{version.Substring(version.Length - 5)}";
+                    using (obj)
+                    {
+                        osCaption = obj["Caption"]?.ToString()?.Replace("Microsoft ", "") ?? "N/A";
+                        osArch = obj["OSArchitecture"]?.ToString() ?? "N/A";
+                        string version = obj["Version"]?.ToString() ?? "";
+                        if (version.Length >= 5)
+                            osCaption = $"{osCaption} Build.{version.Substring(version.Length - 5)}";
+                    }
                     break;
                 }
             }
@@ -42,16 +46,20 @@ namespace ExHyperV.Services
                 var cpus = new List<(string Name, double SpeedGHz)>();
                 using var searcher = new ManagementObjectSearcher(
                     "SELECT Name, MaxClockSpeed FROM Win32_Processor");
-                foreach (ManagementObject obj in searcher.Get())
+                using var cpuCollection = searcher.Get();
+                foreach (ManagementObject obj in cpuCollection)
                 {
-                    string name = obj["Name"]?.ToString()?.Trim() ?? "Unknown CPU";
-                    double speedGHz = 0;
-                    if (obj["MaxClockSpeed"] != null &&
-                        double.TryParse(obj["MaxClockSpeed"].ToString(),
-                            System.Globalization.NumberStyles.Any,
-                            System.Globalization.CultureInfo.InvariantCulture, out double mhz))
-                        speedGHz = Math.Round(mhz / 1000, 2);
-                    cpus.Add((name, speedGHz));
+                    using (obj)
+                    {
+                        string name = obj["Name"]?.ToString()?.Trim() ?? "Unknown CPU";
+                        double speedGHz = 0;
+                        if (obj["MaxClockSpeed"] != null &&
+                            double.TryParse(obj["MaxClockSpeed"].ToString(),
+                                System.Globalization.NumberStyles.Any,
+                                System.Globalization.CultureInfo.InvariantCulture, out double mhz))
+                            speedGHz = Math.Round(mhz / 1000, 2);
+                        cpus.Add((name, speedGHz));
+                    }
                 }
 
                 if (cpus.Any())
@@ -73,13 +81,17 @@ namespace ExHyperV.Services
                 double totalGb = 0;
                 using var searcher = new ManagementObjectSearcher(
                     "SELECT Capacity FROM Win32_PhysicalMemory");
-                foreach (ManagementObject obj in searcher.Get())
+                using var memCollection = searcher.Get();
+                foreach (ManagementObject obj in memCollection)
                 {
-                    if (obj["Capacity"] != null &&
-                        double.TryParse(obj["Capacity"].ToString(),
-                            System.Globalization.NumberStyles.Any,
-                            System.Globalization.CultureInfo.InvariantCulture, out double cap))
-                        totalGb += cap / (1024 * 1024 * 1024);
+                    using (obj)
+                    {
+                        if (obj["Capacity"] != null &&
+                            double.TryParse(obj["Capacity"].ToString(),
+                                System.Globalization.NumberStyles.Any,
+                                System.Globalization.CultureInfo.InvariantCulture, out double cap))
+                            totalGb += cap / (1024 * 1024 * 1024);
+                    }
                 }
                 if (totalGb > 0)
                     memoryInfo = $"{Math.Round(totalGb, 2).ToString(System.Globalization.CultureInfo.InvariantCulture)} GB";

@@ -275,6 +275,7 @@ namespace ExHyperV.Views.Components
             string safeNode = vm.SelectedSpacetimeNode?.Name ?? "Node";
             string safeTime = DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss");
             char[] invalidChars = System.IO.Path.GetInvalidFileNameChars();
+            safeName = string.Concat(safeName.Select(c => invalidChars.Contains(c) ? '_' : c));
             safeNode = string.Concat(safeNode.Select(c => invalidChars.Contains(c) ? '_' : c));
 
             var dialog = new Microsoft.Win32.SaveFileDialog

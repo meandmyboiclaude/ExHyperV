@@ -245,6 +245,7 @@ public class Utils
         if (string.IsNullOrEmpty(macWithColons)) return string.Empty;
 
         string clean = macWithColons.Replace(":", "").Replace("-", "").ToUpperInvariant();
+        if (!Regex.IsMatch(clean, "^[0-9A-F]{12}$")) return string.Empty;
         string formatted = Regex.Replace(clean, ".{2}", "$0-").TrimEnd('-');
 
         var resp = await WmiApi.QueryCimAsync(

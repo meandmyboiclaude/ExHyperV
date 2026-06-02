@@ -40,6 +40,10 @@ namespace ExHyperV.Services
         public async Task<string> ExecuteSingleCommandAsync(SshCredentials credentials, string command, Action<string> logCallback, TimeSpan? commandTimeout = null)
         {
             string commandToExecute = command;
+            var outputBuilder = new StringBuilder();
+            var errorBuilder = new StringBuilder();
+            Action<string> stdoutCallback = (log) => { logCallback(log); outputBuilder.Append(log); };
+            Action<string> stderrCallback = (log) => { logCallback(log); errorBuilder.Append(log); };
 
             var connectionInfo = CreateConnectionInfo(credentials);
 
@@ -47,9 +51,10 @@ namespace ExHyperV.Services
             {
                 await Task.Run(() => client.Connect());
 
-                if (command.Trim().StartsWith("sudo"))
+                var trimmedCommand = command.TrimStart();
+                if (trimmedCommand == "sudo" || trimmedCommand.StartsWith("sudo ", StringComparison.Ordinal))
                 {
-                    string actualCommand = command.Substring(5).Trim(); 
+                    string actualCommand = trimmedCommand.Length > 5 ? trimmedCommand.Substring(5).Trim() : string.Empty;
                     string escapedCommand = actualCommand.Replace("'", "'\\''");
                     string escapedPassword = credentials.Password.Replace("'", "'\\''");
                     commandToExecute = $"echo '{escapedPassword}' | sudo -S -p '' bash -c '{escapedCommand}'";
@@ -58,8 +63,8 @@ namespace ExHyperV.Services
                 sshCommand.CommandTimeout = commandTimeout ?? TimeSpan.FromMinutes(30);
 
                 var asyncResult = sshCommand.BeginExecute();
-                var stdoutTask = ReadStreamAsync(sshCommand.OutputStream, Encoding.UTF8, logCallback);
-                var stderrTask = ReadStreamAsync(sshCommand.ExtendedOutputStream, Encoding.UTF8, logCallback);
+                var stdoutTask = ReadStreamAsync(sshCommand.OutputStream, Encoding.UTF8, stdoutCallback);
+                var stderrTask = ReadStreamAsync(sshCommand.ExtendedOutputStream, Encoding.UTF8, stderrCallback);
                 await Task.Run(() => sshCommand.EndExecute(asyncResult));
                 await Task.WhenAll(stdoutTask, stderrTask);
 
@@ -67,9 +72,9 @@ namespace ExHyperV.Services
 
                 if (sshCommand.ExitStatus != 0)
                 {
-                    throw new SshCommandErrorException(string.Format(Properties.Resources.Error_SshCommandFailed, sshCommand.ExitStatus, sshCommand.Error));
+                    throw new SshCommandErrorException(string.Format(Properties.Resources.Error_SshCommandFailed, sshCommand.ExitStatus, errorBuilder.ToString()));
                 }
-                return sshCommand.Result;
+                return outputBuilder.ToString();
             }
         }
 
@@ -90,9 +95,10 @@ namespace ExHyperV.Services
             {
                 await Task.Run(() => client.Connect());
 
-                if (command.Trim().StartsWith("sudo"))
+                var trimmedCommand = command.TrimStart();
+                if (trimmedCommand == "sudo" || trimmedCommand.StartsWith("sudo ", StringComparison.Ordinal))
                 {
-                    string actualCommand = command.Substring(5).Trim();
+                    string actualCommand = trimmedCommand.Length > 5 ? trimmedCommand.Substring(5).Trim() : string.Empty;
                     string escapedCommand = actualCommand.Replace("'", "'\\''");
                     string escapedPassword = credentials.Password.Replace("'", "'\\''");
                     commandToExecute = $"echo '{escapedPassword}' | sudo -S -p '' bash -c '{escapedCommand}'";
@@ -116,12 +122,18 @@ namespace ExHyperV.Services
         private async Task ReadStreamAsync(Stream stream, Encoding encoding, Action<string> logCallback)
         {
             var buffer = new byte[1024];
+            var decoder = encoding.GetDecoder();
+            var charBuffer = new char[encoding.GetMaxCharCount(buffer.Length)];
             int bytesRead;
             try
             {
                 while ((bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length)) > 0)
                 {
-                    logCallback(encoding.GetString(buffer, 0, bytesRead));
+                    int charsDecoded = decoder.GetChars(buffer, 0, bytesRead, charBuffer, 0);
+                    if (charsDecoded > 0)
+                    {
+                        logCallback(new string(charBuffer, 0, charsDecoded));
+                    }
                 }
             }
             catch (ObjectDisposedException)

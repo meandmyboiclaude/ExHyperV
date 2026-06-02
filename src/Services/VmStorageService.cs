@@ -1062,7 +1062,7 @@ namespace ExHyperV.Services
         public async Task<(bool Success, int DiskNumber)> MountDiskImageAsync(string imagePath)
         {
             var imageResp = await WmiApi.QueryFirstCimAsync(
-                $"SELECT * FROM MSFT_DiskImage WHERE ImagePath = '{imagePath.Replace("'", "\\'")}'",
+                $"SELECT * FROM MSFT_DiskImage WHERE ImagePath = '{imagePath.Replace("\\", "\\\\").Replace("'", "\\'")}'",
                 obj => obj,
                 WmiScope.Storage);
 
@@ -1082,9 +1082,12 @@ namespace ExHyperV.Services
             if (!mountResult.Success) return (false, -1);
 
             var diskResp = await WmiApi.QueryFirstCimAsync(
-                $"SELECT * FROM MSFT_DiskImage WHERE ImagePath = '{imagePath.Replace("'", "\\'")}'",
+                $"SELECT * FROM MSFT_DiskImage WHERE ImagePath = '{imagePath.Replace("\\", "\\\\").Replace("'", "\\'")}'",
                 obj => Convert.ToInt32(obj["Number"] ?? -1),
                 WmiScope.Storage);
+
+            if (!diskResp.HasData || diskResp.Data < 0)
+                return (false, -1);
 
             return (true, diskResp.Data);
         }
@@ -1092,7 +1095,7 @@ namespace ExHyperV.Services
         public async Task<bool> DismountDiskImageAsync(string imagePath)
         {
             var imageResp = await WmiApi.QueryFirstCimAsync(
-                $"SELECT * FROM MSFT_DiskImage WHERE ImagePath = '{imagePath.Replace("'", "\\'")}'",
+                $"SELECT * FROM MSFT_DiskImage WHERE ImagePath = '{imagePath.Replace("\\", "\\\\").Replace("'", "\\'")}'",
                 obj => obj,
                 WmiScope.Storage);
 

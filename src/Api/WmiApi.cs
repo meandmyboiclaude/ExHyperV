@@ -297,7 +297,7 @@ public static class WmiApi
                 using var inParams = target.GetMethodParameters(methodName);
                 setParams?.Invoke(inParams);
 
-                var outParams = target.InvokeMethod(methodName, inParams, null);
+                using var outParams = target.InvokeMethod(methodName, inParams, null);
                 if (outParams is null)
                     return ApiResponse<string[]>.Fail($"Method '{methodName}' returned null");
 
@@ -322,7 +322,6 @@ public static class WmiApi
                 var resulting = raw is string[] arr ? arr :
                                 raw is string s ? new[] { s } :
                                 Array.Empty<string>();
-                outParams.Dispose();
                 return ApiResponse<string[]>.Ok(resulting);
             }
             catch (ManagementException ex)
@@ -412,9 +411,12 @@ public static class WmiApi
 
                 int returnValue = Convert.ToInt32(outParams["ReturnValue"]);
                 if (returnValue != 0)
+                {
+                    outParams.Dispose();
                     return ApiResponse<ManagementBaseObject>.Fail(
                         $"Method '{methodName}' returned code {returnValue}",
                         returnValue, ApiErrorSource.Wmi);
+                }
 
                 return ApiResponse<ManagementBaseObject>.Ok(outParams);
             }

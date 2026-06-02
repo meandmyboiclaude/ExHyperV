@@ -29,7 +29,7 @@ namespace ExHyperV.Services
                 {
                     // 1. 读取 LBA 0 (无论 512 还是 4Kn，前 512 字节始终包含 MBR)
                     byte[] lba0 = new byte[512];
-                    diskStream.Read(lba0, 0, 512);
+                    diskStream.ReadExactly(lba0, 0, 512);
 
                     if (lba0[510] != 0x55 || lba0[511] != 0xAA) return partitions;
 
@@ -84,7 +84,7 @@ namespace ExHyperV.Services
             {
                 byte[] sig = new byte[8];
                 stream.Position = offset;
-                stream.Read(sig, 0, 8);
+                stream.ReadExactly(sig, 0, 8);
                 // "EFI PART" 的十六进制
                 return BitConverter.ToUInt64(sig, 0) == 0x5452415020494645;
             }
@@ -103,7 +103,7 @@ namespace ExHyperV.Services
             // 在正确的扇区位置读取 Header
             diskStream.Position = sectorSize;
             byte[] header = new byte[512];
-            diskStream.Read(header, 0, 512);
+            diskStream.ReadExactly(header, 0, 512);
 
             ulong arrayLba = BitConverter.ToUInt64(header, 72);
             uint entryCount = BitConverter.ToUInt32(header, 80);

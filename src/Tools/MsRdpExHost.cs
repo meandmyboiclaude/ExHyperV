@@ -39,6 +39,7 @@ namespace ExHyperV.Tools
         private int _hookChangeConfirmCount = 0;                           // Hook 变化双采样计数器
         private DispatcherTimer? _reconnectTimer;
         private int _reconnectAttempts = 0;
+        private HwndSource? _hwndSource;                               // 父窗口 HwndSource，用于卸载时摘钩
 
         #endregion
 
@@ -142,11 +143,15 @@ namespace ExHyperV.Tools
                 {
                     _parentWindow.Deactivated += ParentWindow_Deactivated;
                     var helper = new WindowInteropHelper(_parentWindow);
-                    HwndSource.FromHwnd(helper.Handle)?.AddHook(WndProc);
+                    _hwndSource = HwndSource.FromHwnd(helper.Handle);
+                    _hwndSource?.RemoveHook(WndProc); // 防御性：避免同一 HwndSource 重复挂钩
+                    _hwndSource?.AddHook(WndProc);
                 }
             };
             this.Unloaded += (s, e) => {
                 if (_parentWindow != null) _parentWindow.Deactivated -= ParentWindow_Deactivated;
+                _hwndSource?.RemoveHook(WndProc);
+                _hwndSource = null;
                 Disconnect();
             };
         }
@@ -254,7 +259,8 @@ namespace ExHyperV.Tools
                 if (_lastConnectedId != null ||
                     (_rdpControl.RdpClient != null && (short)_rdpControl.RdpClient.ConnectionState != 0))
                 {
-                    try { _rdpControl.Disconnect(); } catch { }
+                    try { _rdpControl.Disconnect(); }
+                    catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"[MsRdpExHost] Disconnect during reconnect failed: {ex.Message}"); }
                     await Task.Delay(50);
                 }
 
@@ -295,9 +301,10 @@ namespace ExHyperV.Tools
                 _rdpControl.Connect();
                 await Task.Delay(10);
             }
-            catch
+            catch (Exception ex)
             {
                 _lastConnectedId = null;
+                System.Diagnostics.Debug.WriteLine($"[MsRdpExHost] TriggerConnectAsync failed: {ex}");
             }
             finally
             {
@@ -473,7 +480,7 @@ namespace ExHyperV.Tools
                         }
                     }
                 }
-                catch { }
+                catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"[MsRdpExHost] SendCtrlAltDel (enhanced) failed: {ex.Message}"); }
             }
             else _ = SendCtrlAltDelViaWmi?.Invoke(targetVmId);
         }

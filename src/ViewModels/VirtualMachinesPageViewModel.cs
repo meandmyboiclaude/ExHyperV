@@ -201,6 +201,11 @@ namespace ExHyperV.ViewModels
         public void Dispose()
         {
             _monitoringCts?.Cancel();
+            _monitoringCts?.Dispose();
+            _gpuDeploymentCts?.Cancel();
+            _gpuDeploymentCts?.Dispose();
+            _bootSaveCts?.Dispose();
+            _bootOrderLock?.Dispose();
             _cpuService?.Dispose();
             _uiTimer?.Stop();
         }
@@ -771,8 +776,9 @@ namespace ExHyperV.ViewModels
                 var vmPath = (await WmiApi.QueryFirstAsync(
                     $"SELECT * FROM Msvm_ComputerSystem WHERE ElementName = '{WmiApi.Escape(vm.Name)}'",
                     obj => obj.Path.Path, WmiScope.HyperV)).Data;
-                await WmiApi.InvokeAsync("SELECT * FROM Msvm_VirtualSystemManagementService",
+                var destroy = await WmiApi.InvokeAsync("SELECT * FROM Msvm_VirtualSystemManagementService",
                     "DestroySystem", p => p["AffectedSystem"] = vmPath, WmiScope.HyperV);
+                if (!destroy.Success) throw new Exception(destroy.Error);
 
                 VmList.Remove(vm);
                 if (SelectedVm == vm) SelectedVm = VmList.FirstOrDefault();
@@ -831,8 +837,9 @@ namespace ExHyperV.ViewModels
                     var vmPath = (await WmiApi.QueryFirstAsync(
                         $"SELECT * FROM Msvm_ComputerSystem WHERE ElementName = '{WmiApi.Escape(vm.Name)}'",
                         obj => obj.Path.Path, WmiScope.HyperV)).Data;
-                    await WmiApi.InvokeAsync("SELECT * FROM Msvm_VirtualSystemManagementService",
+                    var destroy = await WmiApi.InvokeAsync("SELECT * FROM Msvm_VirtualSystemManagementService",
                         "DestroySystem", p => p["AffectedSystem"] = vmPath, WmiScope.HyperV);
+                    if (!destroy.Success) throw new Exception(destroy.Error);
 
                     // 5. 删除所有 vhdx 文件
                     foreach (var diskPath in diskPaths)
@@ -1715,6 +1722,12 @@ namespace ExHyperV.ViewModels
                         // 如果修改成功，需要更新基准缓存为当前状态，否则下次别的选项失败时，会把这次成功的修改也弹回去
                         _originalMemorySettingsCache = SelectedVm.MemorySettings.Clone();
                     }
+                }
+                catch (Exception ex)
+                {
+                    // 异常（WMI/COM/网络等）：弹回到纯净缓存并提示，避免 async void 未处理异常导致进程崩溃
+                    SelectedVm.MemorySettings.Restore(_originalMemorySettingsCache);
+                    ShowSnackbar(Properties.Resources.Common_Error, Utils.GetFriendlyErrorMessages(ex.Message), ControlAppearance.Danger, SymbolRegular.ErrorCircle24);
                 }
                 finally
                 {
@@ -3273,9 +3286,12 @@ namespace ExHyperV.ViewModels
                                     task.Description = string.Format(Properties.Resources.Msg_Gpu_ForceOff, state);
                                     AppendLog(task.Description);
                                     await _powerService.ExecuteControlActionAsync(SelectedVm.Name, "TurnOff");
+                                    var powerOffTimeout = System.Diagnostics.Stopwatch.StartNew();
                                     while (!(await _queryService.IsVmPoweredOffAsync(SelectedVm.Name)).IsOff)
                                     {
-                                        await Task.Delay(100);
+                                        if (powerOffTimeout.Elapsed > TimeSpan.FromSeconds(60))
+                                            throw new TimeoutException(string.Format(Properties.Resources.Msg_Gpu_ForceOff, "TurnOff timeout"));
+                                        await Task.Delay(500);
                                     }
                                 }
                                 task.Description = Properties.Resources.Msg_Gpu_Off;
@@ -3309,7 +3325,10 @@ namespace ExHyperV.ViewModels
                             await Task.Delay(100);
                             var currentAdapters = await _vmGpuService.GetVmGpuAdaptersAsync(SelectedVm.Name);
                             // 记录下来，以便后续步骤（如驱动安装）失败时删除
-                            _currentProcessingGpuAdapterId = currentAdapters.LastOrDefault().Id;
+                            var assignedAdapter = currentAdapters.LastOrDefault();
+                            if (string.IsNullOrEmpty(assignedAdapter.Id))
+                                throw new Exception("GPU partition was assigned but its adapter ID could not be located for rollback tracking.");
+                            _currentProcessingGpuAdapterId = assignedAdapter.Id;
                             break;
 
                         case GpuTaskType.Driver:

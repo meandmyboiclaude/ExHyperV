@@ -48,7 +48,7 @@ namespace ExHyperV.Services
         {
             try
             {
-                Process process = new()
+                using Process process = new()
                 {
                     StartInfo =
                     {
@@ -61,7 +61,11 @@ namespace ExHyperV.Services
                     }
                 };
                 process.Start();
+                // Drain both streams concurrently to avoid pipe-buffer deadlock.
+                Task<string> outTask = process.StandardOutput.ReadToEndAsync();
+                Task<string> errTask = process.StandardError.ReadToEndAsync();
                 process.WaitForExit();
+                Task.WaitAll(outTask, errTask);
                 return process.ExitCode;
             }
             catch { return -1; }
@@ -1135,10 +1139,18 @@ namespace ExHyperV.Services
                 {
                     foreach (var item in remoteScripts)
                     {
+                        // 拒绝被篡改/恶意的 index.json 条目：文件名必须是不含 shell 元字符的 .sh 基名，
+                        // 因为 FileName 之后会被拼进 SSH 上的 sh -c 命令（防命令注入）。
+                        if (string.IsNullOrEmpty(item.FileName) ||
+                            !Regex.IsMatch(item.FileName, @"^[A-Za-z0-9._-]+\.sh$"))
+                        {
+                            Debug.WriteLine($"Skipping remote script with unsafe filename: {item.FileName}");
+                            continue;
+                        }
                         item.IsLocal = false;
                         // 【修改点】：添加“在线”标识
                         item.Name = string.Format(Properties.Resources.VmGPUService_LogOnline, item.Name);
-                        item.SourcePathOrUrl = $"{ScriptBaseUrl}{item.FileName}";
+                        item.SourcePathOrUrl = $"{ScriptBaseUrl}{Uri.EscapeDataString(item.FileName)}";
                         allScripts.Add(item);
                     }
                 }

@@ -89,7 +89,11 @@ namespace ExHyperV.Services
                 if (coreIds.Any())
                     process.ProcessorAffinity = (IntPtr)newAffinityMask;
                 else
-                    process.ProcessorAffinity = (IntPtr)((1L << Environment.ProcessorCount) - 1);
+                {
+                    int n = Math.Min(Environment.ProcessorCount, 64);
+                    long allCoresMask = (n == 64) ? -1L : ((1L << n) - 1);
+                    process.ProcessorAffinity = (IntPtr)allCoresMask;
+                }
 
                 return true; // 设置成功
             }

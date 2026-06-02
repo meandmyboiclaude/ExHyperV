@@ -357,6 +357,7 @@ namespace ExHyperV.Services
                     if (!string.IsNullOrEmpty(jobPath))
                     {
                         using var job = new ManagementObject(hyperVScope, new ManagementPath(jobPath), null);
+                        var deadline = DateTime.UtcNow.AddMinutes(2);
                         while (true)
                         {
                             job.Get();
@@ -364,6 +365,8 @@ namespace ExHyperV.Services
                             if (state == 7) break;
                             if (state > 7)
                                 throw new InvalidOperationException($"TPM Job 失败，状态：{state}");
+                            if (DateTime.UtcNow > deadline)
+                                throw new TimeoutException("TPM ModifySecuritySettings job timed out (2 min)");
                             System.Threading.Thread.Sleep(300);
                         }
                     }

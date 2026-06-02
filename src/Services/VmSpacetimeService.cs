@@ -284,10 +284,10 @@ internal class VmSpacetimeService
         var (ctrlType, ctrlNum, ctrlLoc) = await FindFreeScsiSlotAsync(vmName);
         if (ctrlNum == -1) return (false, Properties.Resources.VmSpacetimeService_ErrNoScsiSlot);
 
-        File.Move(originalAvhdx, renamedVhdx);
-
         try
         {
+            File.Move(originalAvhdx, renamedVhdx);
+
             var createResult = await CreateDifferencingDiskAsync(tmpDisk, renamedVhdx);
             if (!createResult.Success)
             {
@@ -422,16 +422,23 @@ internal class VmSpacetimeService
                 {
                     _ = Task.Run(async () =>
                     {
-                        await Task.Delay(2000);
-                        for (int i = 0; i < 10; i++)
+                        try
                         {
-                            var s = await WmiApi.QueryFirstAsync(vmWql, obj => (ushort)(obj["EnabledState"] ?? 0));
-                            if (s.Data == 3 || s.Data == 6)
+                            await Task.Delay(2000);
+                            for (int i = 0; i < 10; i++)
                             {
-                                await _powerService.ExecuteControlActionAsync(vmName, "Start");
-                                break;
+                                var s = await WmiApi.QueryFirstAsync(vmWql, obj => (ushort)(obj["EnabledState"] ?? 0));
+                                if (s.Data == 3 || s.Data == 6)
+                                {
+                                    await _powerService.ExecuteControlActionAsync(vmName, "Start");
+                                    break;
+                                }
+                                await Task.Delay(1000);
                             }
-                            await Task.Delay(1000);
+                        }
+                        catch (Exception ex)
+                        {
+                            Debug.WriteLine($"[Teleport] Auto-restart of '{vmName}' failed: {ex.Message}");
                         }
                     });
                     return (true, Properties.Resources.VmSpacetimeService_MsgTravelInitiated);

@@ -32,16 +32,12 @@ namespace ExHyperV.Services
             string latestVersionTag = null;
             try
             {
-                var response = await _httpClient.GetAsync(GitHubApiUrl);
+                using var response = await _httpClient.GetAsync(GitHubApiUrl);
                 if (response.IsSuccessStatusCode)
                 {
-                    var jsonStream = await response.Content.ReadAsStreamAsync();
+                    using var jsonStream = await response.Content.ReadAsStreamAsync();
                     var release = await System.Text.Json.JsonSerializer.DeserializeAsync<GitHubRelease>(jsonStream);
                     latestVersionTag = release?.tag_name;
-                }
-                else
-                {
-                    string errorContent = await response.Content.ReadAsStringAsync();
                 }
             }
             catch (Exception)

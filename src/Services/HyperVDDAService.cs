@@ -423,7 +423,7 @@ namespace ExHyperV.Services
                     foreach (System.Management.ManagementObject obj in pciSettingCol)
                     {
                         if (obj["HostResource"] is string[] hr && hr.Length > 0
-                            && hr[0].Contains(pureId.Replace("\\", "\\\\"), StringComparison.OrdinalIgnoreCase))
+                            && hr[0]?.Contains(pureId.Replace("\\", "\\\\"), StringComparison.OrdinalIgnoreCase) == true)
                         {
                             targetSetting = obj;
                             break;

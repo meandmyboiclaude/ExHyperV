@@ -29,7 +29,7 @@ namespace ExHyperV.Services
                         targetPath = settingsResp.Data;
                         _vmSettingsPathCache[vmName] = targetPath;
                     }
-                    var svc = WmiApi.GetVirtualSystemManagementService();
+                    using var svc = WmiApi.GetVirtualSystemManagementService();
                     using var inParams = svc.GetMethodParameters("GetVirtualSystemThumbnailImage");
                     inParams["TargetSystem"] = targetPath;
                     inParams["WidthPixels"] = (ushort)desiredWidth;

@@ -127,13 +127,16 @@ namespace ExHyperV.ViewModels
 
             if (resultType == MmioCheckResultType.NeedsConfirmation)
             {
+                if (Application.Current.MainWindow is not MainWindow mainWindow || mainWindow.ContentPresenterForDialogs == null)
+                    return false;
+
                 var confirmDialog = new ContentDialog
                 {
                     Title = ExHyperV.Properties.Resources.DdaPage_Title_MmioSpaceTooSmall,
                     Content = message,
                     PrimaryButtonText = ExHyperV.Properties.Resources.Button_Yes,
                     CloseButtonText = ExHyperV.Properties.Resources.Button_No,
-                    DialogHost = ((MainWindow)Application.Current.MainWindow).ContentPresenterForDialogs
+                    DialogHost = mainWindow.ContentPresenterForDialogs
                 };
                 var result = await confirmDialog.ShowAsync();
                 if (result != ContentDialogResult.Primary) return false;

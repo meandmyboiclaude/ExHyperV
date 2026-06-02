@@ -1,6 +1,7 @@
 ﻿using ExHyperV.Api;
 using ExHyperV.Models;
 using ExHyperV.Tools;
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO;
 using System.Management;
@@ -25,8 +26,8 @@ namespace ExHyperV.Services
 
         // --- 静态变量与缓存 ---
 
-        private static readonly Dictionary<string, string> _switchNameCache = new(StringComparer.OrdinalIgnoreCase);
-        private static readonly Dictionary<string, (long Current, long Max, string Type)> _diskSizeCache = new();
+        private static readonly ConcurrentDictionary<string, string> _switchNameCache = new(StringComparer.OrdinalIgnoreCase);
+        private static readonly ConcurrentDictionary<string, (long Current, long Max, string Type)> _diskSizeCache = new();
         private static Dictionary<Guid, int> _vmProcessIdCache = new();
         private static DateTime _processIdCacheTimestamp = DateTime.MinValue;
         private List<PerformanceCounter> _gpuCounters = new();
@@ -573,7 +574,8 @@ namespace ExHyperV.Services
                 using var searcher = new ManagementObjectSearcher(
                     svcForScope.Scope,
                     new ObjectQuery("SELECT * FROM Msvm_ImageManagementService"));
-                using var service = searcher.Get().Cast<ManagementObject>().FirstOrDefault();
+                using var col = searcher.Get();
+                using var service = col.Cast<ManagementObject>().FirstOrDefault();
                 if (service != null)
                 {
                     using var inParams = service.GetMethodParameters("GetVirtualHardDiskSettingData");
