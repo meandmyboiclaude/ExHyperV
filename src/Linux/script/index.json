@@ -1,5 +1,19 @@
 [
   {
+    "FileName": "CachyOS-Official.sh",
+    "Name": "CachyOS-Official",
+    "Description": "GPU-PV deployment script for CachyOS (Arch-based, pacman/yay, Clang-built kernels)",
+    "Author": "ExHyperV Community",
+    "Version": "1.0.0"
+  },
+  {
+    "FileName": "Fedora-44-Official.sh",
+    "Name": "Fedora-44-Official",
+    "Description": "GPU-PV deployment script for Fedora 44 (also works on Fedora 41+)",
+    "Author": "ExHyperV Community",
+    "Version": "1.0.0"
+  },
+  {
     "FileName": "Ubuntu-22.04-Official.sh",
     "Name": "Ubuntu-22.04-Official",
     "Description": "CUDA√Mesa√",
@@ -19,19 +33,5 @@
     "Description": "在Win10 22h2 Build.19045測試可用, 已測試Win11 24h2不可用, 其他版本未知",
     "Author": "Justsenger",
     "Version": "3.8.0"
-  },
-  {
-    "FileName": "Fedora-44-Official.sh",
-    "Name": "Fedora-44-Official",
-    "Description": "GPU-PV deployment script for Fedora 44 (also works on Fedora 41+)",
-    "Author": "ExHyperV Community",
-    "Version": "1.0.0"
-  },
-  {
-    "FileName": "CachyOS-Official.sh",
-    "Name": "CachyOS-Official",
-    "Description": "GPU-PV deployment script for CachyOS (Arch-based, supports Clang-built kernels)",
-    "Author": "ExHyperV Community",
-    "Version": "1.0.0"
   }
 ]
