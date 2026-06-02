@@ -5,6 +5,7 @@ using System.Net.Http;
 using System.Net.Sockets;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using ExHyperV.Api;
 using ExHyperV.Models;
 using ExHyperV.Tools;
 using Renci.SshNet;
@@ -13,7 +14,19 @@ namespace ExHyperV.Services
 {
     public class VmGPUService
     {
-        #region 内部模型与常量
+        private readonly VmPowerService _powerService;
+        private readonly VmQueryService _queryService;
+        private readonly VmNetworkService _networkService;
+        private readonly VmStorageService _storageService;
+        private readonly VmMmioService _mmioService = new();
+        public VmGPUService(VmPowerService powerService, VmQueryService queryService, VmNetworkService networkService, VmStorageService storageService)
+        {
+            _powerService = powerService;
+            _queryService = queryService;
+            _networkService = networkService;
+            _storageService = storageService;
+        }
+
         private class VmDiskTarget
         {
             public bool IsPhysical { get; set; }
@@ -21,34 +34,6 @@ namespace ExHyperV.Services
             public int PhysicalDiskNumber { get; set; } // 物理硬盘的 Disk Number (e.g. 0, 1, 2)
         }
         private const string ScriptBaseUrl = "https://raw.githubusercontent.com/meandmyboiclaude/ExHyperV/main/src/Linux/script/";
-
-        // PowerShell 脚本常量
-        private const string GetGpuWmiInfoScript = "Get-CimInstance -Class Win32_VideoController | select PNPDeviceID,name,AdapterCompatibility,DriverVersion";
-        private const string GetGpuRamScript = @"
-            Get-ItemProperty -Path ""HKLM:\SYSTEM\ControlSet001\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}\0*"" -ErrorAction SilentlyContinue |
-                Select-Object MatchingDeviceId,
-                      @{Name='MemorySize'; Expression={
-                          if ($_. ""HardwareInformation.qwMemorySize"") {
-                              $_.""HardwareInformation.qwMemorySize""
-                          } 
-                          elseif ($_. ""HardwareInformation.MemorySize"" -and $_.""HardwareInformation.MemorySize"" -isnot [byte[]]) {
-                              $_.""HardwareInformation.MemorySize""
-                          }
-                          else {
-                              $null
-                          }
-                      }} |
-                Where-Object { $_.MemorySize -ne $null -and $_.MemorySize -gt 0 }";
-
-        private const string GetPartitionableGpusWin11Script = "Get-VMHostPartitionableGpu | select name";
-        private const string GetPartitionableGpusWin10Script = "Get-VMPartitionableGpu | select name";
-
-        private const string CheckHyperVModuleScript = "Get-Module -ListAvailable -Name Hyper-V";
-        private const string GetVmsScript = "Hyper-V\\Get-VM | Select Id, vmname,LowMemoryMappedIoSpace,GuestControlledCacheTypes,HighMemoryMappedIoSpace,Notes";
-        #endregion
-
-        #region 环境与底层工具集
-        private bool IsWindows11OrGreater() => Environment.OSVersion.Version.Build >= 22000;
 
         public Task PrepareHostEnvironmentAsync()
         {
@@ -63,7 +48,7 @@ namespace ExHyperV.Services
         {
             try
             {
-                using Process process = new()
+                Process process = new()
                 {
                     StartInfo =
                     {
@@ -76,8 +61,6 @@ namespace ExHyperV.Services
                     }
                 };
                 process.Start();
-                process.StandardOutput.ReadToEnd();
-                process.StandardError.ReadToEnd();
                 process.WaitForExit();
                 return process.ExitCode;
             }
@@ -113,149 +96,171 @@ namespace ExHyperV.Services
             }
             throw new IOException(ExHyperV.Properties.Resources.Error_NoAvailableDriveLetters);
         }
-        #endregion
 
         #region 硬件信息与虚拟机查询
-        public Task<List<GPUInfo>> GetHostGpusAsync()
+        public async Task<List<GPUInfo>> GetHostGpusAsync()
         {
-            return Task.Run(() =>
+            var pciInfoProvider = new PciInfoProvider();
+            await pciInfoProvider.EnsureInitializedAsync();
+
+            var gpuList = new List<GPUInfo>();
+
+            // 1. Win32_VideoController
+            var gpuResp = await WmiApi.QueryAsync(
+                "SELECT PNPDeviceID, Name, AdapterCompatibility, DriverVersion FROM Win32_VideoController",
+                obj => new {
+                    Name = obj["Name"]?.ToString(),
+                    InstanceId = obj["PNPDeviceID"]?.ToString(),
+                    Manu = obj["AdapterCompatibility"]?.ToString(),
+                    DriverVersion = obj["DriverVersion"]?.ToString()
+                }, WmiScope.CimV2);
+
+            if (gpuResp.HasData)
             {
-                var pciInfoProvider = new PciInfoProvider();
-                pciInfoProvider.EnsureInitializedAsync().Wait();
-
-                var gpuList = new List<GPUInfo>();
-                var gpulinked = Utils.Run(GetGpuWmiInfoScript);
-                if (gpulinked.Count > 0)
+                foreach (var gpu in gpuResp.Data)
                 {
-                    foreach (var gpu in gpulinked)
-                    {
-                        string name = gpu.Members["name"]?.Value?.ToString();
-                        string instanceId = gpu.Members["PNPDeviceID"]?.Value?.ToString();
-                        string manu = gpu.Members["AdapterCompatibility"]?.Value?.ToString();
-                        string driverVersion = gpu.Members["DriverVersion"]?.Value?.ToString();
-                        if (name == null || instanceId == null || manu == null || driverVersion == null) continue;
-                        string vendor = pciInfoProvider.GetVendorFromInstanceId(instanceId);
-                        if (instanceId != null && !instanceId.ToUpper().StartsWith("PCI\\") && !instanceId.ToUpper().Contains("ACPI")) continue;
-                        gpuList.Add(new GPUInfo(name, "True", manu, instanceId, null, null, driverVersion, vendor));
-                    }
+                    if (gpu.Name == null || gpu.InstanceId == null || gpu.Manu == null || gpu.DriverVersion == null) continue;
+                    if (!gpu.InstanceId.ToUpper().StartsWith("PCI\\") && !gpu.InstanceId.ToUpper().Contains("ACPI")) continue;
+                    string vendor = pciInfoProvider.GetVendorFromInstanceId(gpu.InstanceId);
+                    gpuList.Add(new GPUInfo(gpu.Name, "True", gpu.Manu, gpu.InstanceId, null, null, gpu.DriverVersion, vendor));
                 }
+            }
 
-                bool hasHyperV = Utils.Run(CheckHyperVModuleScript).Count > 0;
-                if (!hasHyperV) return gpuList;
-
-                var gpuram = Utils.Run(GetGpuRamScript);
-                if (gpuram.Count > 0)
+            // 2. GPU RAM 注册表
+            try
+            {
+                var gpuRamMap = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+                using var baseKey = Microsoft.Win32.RegistryKey.OpenBaseKey(
+                    Microsoft.Win32.RegistryHive.LocalMachine, Microsoft.Win32.RegistryView.Registry64);
+                using var classKey = baseKey.OpenSubKey(
+                    @"SYSTEM\ControlSet001\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}");
+                if (classKey != null)
                 {
-                    foreach (var existingGpu in gpuList)
+                    foreach (var subKeyName in classKey.GetSubKeyNames())
                     {
-                        var matchedGpu = gpuram.FirstOrDefault(g =>
+                        try
                         {
-                            string rawId = g.Members["MatchingDeviceId"]?.Value?.ToString().ToUpper();
-                            if (string.IsNullOrEmpty(rawId)) return false;
-                            // 查找核心硬件 ID 字段，不依赖固定长度
-                            return existingGpu.InstanceId.ToUpper().Contains(rawId);
-                        });
-
-                        string preram = matchedGpu?.Members["MemorySize"]?.Value?.ToString() ?? "0";
-                        existingGpu.Ram = long.TryParse(preram, out long _) ? preram : "0";
+                            using var subKey = classKey.OpenSubKey(subKeyName);
+                            if (subKey == null) continue;
+                            string matchingId = subKey.GetValue("MatchingDeviceId")?.ToString()?.ToUpper();
+                            if (string.IsNullOrEmpty(matchingId)) continue;
+                            long memSize = 0;
+                            var qwMem = subKey.GetValue("HardwareInformation.qwMemorySize");
+                            if (qwMem != null) try { memSize = Convert.ToInt64(qwMem); } catch { }
+                            if (memSize == 0)
+                            {
+                                var mem = subKey.GetValue("HardwareInformation.MemorySize");
+                                if (mem != null && mem is not byte[]) try { memSize = Convert.ToInt64(mem); } catch { }
+                            }
+                            if (memSize > 0) gpuRamMap[matchingId] = memSize;
+                        }
+                        catch { continue; }
                     }
                 }
 
-                string GetPartitionableGpusScript = IsWindows11OrGreater() ? GetPartitionableGpusWin11Script : GetPartitionableGpusWin10Script;
-                var partitionableGpus = Utils.Run(GetPartitionableGpusScript);
-                if (partitionableGpus.Count > 0)
+                foreach (var existingGpu in gpuList)
                 {
-                    foreach (var gpu in partitionableGpus)
+                    var matched = gpuRamMap.FirstOrDefault(kv =>
                     {
-                        string pname = gpu.Members["Name"]?.Value.ToString();
-                        string normalizedPNameId = NormalizeDeviceId(pname);
-
-                        if (string.IsNullOrEmpty(normalizedPNameId)) continue;
-                        var existingGpu = gpuList.FirstOrDefault(g => NormalizeDeviceId(g.InstanceId) == normalizedPNameId);
-                        if (existingGpu != null) existingGpu.Pname = pname;
-                    }
+                        Debug.WriteLine($"MatchingId: '{kv.Key}', GpuInstanceId: '{existingGpu.InstanceId.ToUpper()}'");
+                        return existingGpu.InstanceId.ToUpper().Contains(kv.Key);
+                    });
+                    if (matched.Key != null)
+                        existingGpu.Ram = matched.Value.ToString();
                 }
-                return gpuList;
-            });
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"GPU RAM registry error: {ex.Message}");
+            }
+
+            // 3. Msvm_PartitionableGpu
+            var partResp = await WmiApi.QueryAsync(
+                "SELECT Name FROM Msvm_PartitionableGpu",
+                obj => obj["Name"]?.ToString() ?? "");
+
+            if (partResp.HasData)
+            {
+                foreach (var pname in partResp.Data)
+                {
+                    if (string.IsNullOrEmpty(pname)) continue;
+                    string normalizedPName = NormalizeDeviceId(pname);
+                    var existingGpu = gpuList.FirstOrDefault(g =>
+                        NormalizeDeviceId(g.InstanceId) == normalizedPName);
+                    if (existingGpu != null) existingGpu.Pname = pname;
+                }
+            }
+
+            return gpuList;
         }
-
-        public Task<List<(string Id, string InstancePath)>> GetVmGpuAdaptersAsync(string vmName)
+        public async Task<List<(string Id, string InstancePath)>> GetVmGpuAdaptersAsync(string vmName)
         {
-            return Task.Run(() =>
+            var result = new List<(string Id, string InstancePath)>();
+            string scopePath = @"\\.\root\virtualization\v2";
+            try
             {
-                var result = new List<(string Id, string InstancePath)>();
-                string scopePath = @"\\.\root\virtualization\v2";
+                var notesResp = await WmiApi.QueryFirstAsync(
+                    $"SELECT * FROM Msvm_VirtualSystemSettingData WHERE ElementName = '{WmiApi.Escape(vmName)}' AND VirtualSystemType = 'Microsoft:Hyper-V:System:Realized'",
+                    obj => obj["Notes"] is string[] arr ? string.Join("\n", arr) : obj["Notes"]?.ToString() ?? "");
+                string vmNotes = notesResp.Data ?? "";
 
-                try
+                string query = $"SELECT * FROM Msvm_ComputerSystem WHERE ElementName = '{vmName}'";
+                using var searcher = new ManagementObjectSearcher(scopePath, query);
+                using var vmCollection = searcher.Get();
+                var computerSystem = vmCollection.Cast<ManagementObject>().FirstOrDefault();
+                if (computerSystem == null) return result;
+
+                using var relatedSettings = computerSystem.GetRelated(
+                    "Msvm_VirtualSystemSettingData",
+                    "Msvm_SettingsDefineState",
+                    null, null, null, null, false, null);
+                var virtualSystemSetting = relatedSettings.Cast<ManagementObject>().FirstOrDefault();
+                if (virtualSystemSetting == null) return result;
+
+                using var gpuSettingsCollection = virtualSystemSetting.GetRelated(
+                    "Msvm_GpuPartitionSettingData",
+                    "Msvm_VirtualSystemSettingDataComponent",
+                    null, null, null, null, false, null);
+
+                foreach (var gpuSetting in gpuSettingsCollection.Cast<ManagementObject>())
                 {
-                    var notesResult = Utils.Run($"(Get-VM -Name '{vmName}').Notes");
-                    string vmNotes = (notesResult != null && notesResult.Count > 0) ? notesResult[0]?.ToString() ?? "" : "";
+                    string adapterId = gpuSetting["InstanceID"]?.ToString();
+                    string instancePath = string.Empty;
 
-                    string query = $"SELECT * FROM Msvm_ComputerSystem WHERE ElementName = '{vmName}'";
-                    using var searcher = new ManagementObjectSearcher(scopePath, query);
-                    using var vmCollection = searcher.Get();
-
-                    var computerSystem = vmCollection.Cast<ManagementObject>().FirstOrDefault();
-                    if (computerSystem == null) return result;
-
-                    using var relatedSettings = computerSystem.GetRelated(
-                        "Msvm_VirtualSystemSettingData",
-                        "Msvm_SettingsDefineState",
-                        null, null, null, null, false, null);
-
-                    var virtualSystemSetting = relatedSettings.Cast<ManagementObject>().FirstOrDefault();
-                    if (virtualSystemSetting == null) return result;
-
-                    using var gpuSettingsCollection = virtualSystemSetting.GetRelated(
-                        "Msvm_GpuPartitionSettingData",
-                        "Msvm_VirtualSystemSettingDataComponent",
-                        null, null, null, null, false, null);
-
-                    foreach (var gpuSetting in gpuSettingsCollection.Cast<ManagementObject>())
+                    string[] hostResources = (string[])gpuSetting["HostResource"];
+                    if (hostResources != null && hostResources.Length > 0)
                     {
-                        string adapterId = gpuSetting["InstanceID"]?.ToString();
-                        string instancePath = string.Empty;
-
-                        string[] hostResources = (string[])gpuSetting["HostResource"];
-                        if (hostResources != null && hostResources.Length > 0)
+                        try
                         {
-                            try
-                            {
-                                using var partitionableGpu = new ManagementObject(hostResources[0]);
-                                partitionableGpu.Get();
-                                instancePath = partitionableGpu["Name"]?.ToString();
-                            }
-                            catch { }
+                            using var partitionableGpu = new ManagementObject(hostResources[0]);
+                            partitionableGpu.Get();
+                            instancePath = partitionableGpu["Name"]?.ToString();
                         }
+                        catch { }
+                    }
 
-                        if (string.IsNullOrEmpty(instancePath) || instancePath.Contains("Unknown"))
+                    if (string.IsNullOrEmpty(instancePath) || instancePath.Contains("Unknown"))
+                    {
+                        string tagPrefix = "[AssignedGPU:";
+                        int startIndex = vmNotes.IndexOf(tagPrefix);
+                        if (startIndex != -1)
                         {
-                            string tagPrefix = "[AssignedGPU:";
-                            int startIndex = vmNotes.IndexOf(tagPrefix);
-                            if (startIndex != -1)
-                            {
-                                startIndex += tagPrefix.Length;
-                                int endIndex = vmNotes.IndexOf("]", startIndex);
-                                if (endIndex != -1)
-                                {
-                                    instancePath = vmNotes.Substring(startIndex, endIndex - startIndex);
-                                }
-                            }
-                        }
-
-                        if (!string.IsNullOrEmpty(adapterId))
-                        {
-                            result.Add((adapterId, instancePath));
+                            startIndex += tagPrefix.Length;
+                            int endIndex = vmNotes.IndexOf("]", startIndex);
+                            if (endIndex != -1)
+                                instancePath = vmNotes.Substring(startIndex, endIndex - startIndex);
                         }
                     }
-                }
-                catch (Exception ex)
-                {
-                    System.Diagnostics.Debug.WriteLine($"WMI Query Error: {ex.Message}");
-                }
 
-                return result;
-            });
+                    if (!string.IsNullOrEmpty(adapterId))
+                        result.Add((adapterId, instancePath));
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"WMI Query Error: {ex.Message}");
+            }
+            return result;
         }
         #endregion
 
@@ -285,114 +290,67 @@ namespace ExHyperV.Services
             return false; // 超时
         }
 
-        public Task<string> GetVmStateAsync(string vmName)
-        {
-            return Task.Run(() =>
-            {
-                var result = Utils.Run($"(Get-VM -Name '{vmName}').State");
-                if (result != null && result.Count > 0)
-                {
-                    return result[0].ToString();
-                }
-                return "NotFound";
-            });
-        }
-
-        public Task<(bool IsOff, string CurrentState)> IsVmPoweredOffAsync(string vmName)
-        {
-            return Task.Run(() =>
-            {
-                var result = Utils.Run($"(Get-VM -Name '{vmName}').State");
-                string state = result != null && result.Count > 0 ? result[0].ToString() : "Unknown";
-                bool isOff = state.Equals("Off", StringComparison.OrdinalIgnoreCase);
-                return (isOff, state);
-            });
-        }
-
         /// <summary>检查VM配置，判断是否满足GPU-PV要求。</summary>
         /// <param name="vmName">待检查的VM名称</param>
         /// <returns>如果满足要求，返回true。否则返回false。</returns>
 
-        public Task<bool> CheckVmForGpuAsync(string vmName)
+        public async Task<bool> CheckVmForGpuAsync(string vmName)
         {
-            return Task.Run(() =>
+            try
             {
-                try
-                {
-                    var vmList = Utils.Run($"Get-VM -Name '{vmName}'");
-                    var vm = vmList?[0];
-                    if (vm == null) return false;
+                var r = await WmiApi.QueryFirstAsync(
+                    $"SELECT * FROM Msvm_VirtualSystemSettingData WHERE ElementName = '{WmiApi.Escape(vmName)}' AND VirtualSystemType = 'Microsoft:Hyper-V:System:Realized'",
+                    obj =>
+                    {
+                        ulong highMMIO = Convert.ToUInt64(obj["HighMemoryMappedIoSpace"] ?? 0);
+                        ulong baseAddr = Convert.ToUInt64(obj["HighMemoryMappedIoBaseAddress"] ?? 0);
+                        bool cacheEnabled = Convert.ToBoolean(obj["GuestControlledCacheTypes"] ?? false);
+                        return (highMMIO, baseAddr, cacheEnabled);
+                    });
 
-                    var highMMIO = (ulong)(vm.Members["HighMemoryMappedIoSpace"]?.Value ?? 0);
-                    var baseAddr = (ulong)(vm.Members["HighMemoryMappedIoBaseAddress"]?.Value ?? 0);
-                    var cacheEnabled = (bool)(vm.Members["GuestControlledCacheTypes"]?.Value ?? false);
-                    if (highMMIO < 32212254720) return false;
-                    if (baseAddr == 68182605824 || baseAddr == 36507222016) return false;
-
-                    if (!cacheEnabled) return false;
-
-                    return true;
-                }
-                catch { return false; }
-            });
+                if (!r.HasData) return false;
+                var (h, b, c) = r.Data;
+                if (h < 32212254720) return false;
+                if (b == 68182605824 || b == 36507222016) return false;
+                if (!c) return false;
+                return true;
+            }
+            catch { return false; }
         }
         public async Task<bool> OptimizeVmForGpuAsync(string vmName)
         {
-
-            return await MMIOOptimizer.OptimizeVmAsync(vmName);
+            return await _mmioService.ConfigureMmioAsync(vmName);
         }
-        
+
         #endregion
 
         #region 磁盘与分区操作
-        private Task<List<VmDiskTarget>> GetAllVmHardDrivesAsync(string vmName)
+        private async Task<List<VmDiskTarget>> GetAllVmHardDrivesAsync(string vmName)
         {
-            return Task.Run(() =>
-            {
-                var script = $@"
-            $drives = Get-VMHardDiskDrive -VMName '{vmName}' | Sort-Object ControllerNumber, ControllerLocation
-            if ($drives -eq $null) {{ return @() }}
-            
-            $results = @()
-            foreach ($drive in $drives) {{
-                if ($drive.DiskNumber -ne $null) {{
-                    $results += 'PHYSICAL:' + $drive.DiskNumber
-                }} 
-                elseif (-not [string]::IsNullOrWhiteSpace($drive.Path)) {{
-                    $results += 'VHD:' + $drive.Path
-                }}
-            }}
-            return $results";
+            var vm = new VmInstanceInfo(Guid.Empty, vmName);
+            await _storageService.LoadVmStorageItemsAsync(vm);
 
-                var result = Utils.Run(script);
-                var list = new List<VmDiskTarget>();
-                if (result == null) return list;
+            Debug.WriteLine($"[GPU] StorageItems count: {vm.StorageItems.Count}");
+            foreach (var item in vm.StorageItems)
+                Debug.WriteLine($"[GPU] Item: DriveType={item.DriveType}, DiskType={item.DiskType}, Path={item.PathOrDiskNumber}, DiskNumber={item.DiskNumber}");
 
-                foreach (var raw in result)
+            return vm.StorageItems
+                .Where(i => i.DriveType == "HardDisk")
+                .Select(i => new VmDiskTarget
                 {
-                    string s = raw.ToString();
-                    if (s.StartsWith("PHYSICAL:"))
-                    {
-                        if (int.TryParse(s.Substring(9), out int num))
-                            list.Add(new VmDiskTarget { IsPhysical = true, PhysicalDiskNumber = num });
-                    }
-                    else if (s.StartsWith("VHD:"))
-                    {
-                        list.Add(new VmDiskTarget { IsPhysical = false, Path = s.Substring(4) });
-                    }
-                }
-                return list;
-            });
+                    IsPhysical = i.DiskType == "Physical",
+                    Path = i.DiskType == "Physical" ? null : i.PathOrDiskNumber,
+                    PhysicalDiskNumber = i.DiskType == "Physical" ? i.DiskNumber : 0
+                })
+                .ToList();
         }
 
         public async Task<List<PartitionInfo>> GetPartitionsFromVmAsync(string vmName)
         {
-            return await Task.Run(() =>
+            return await Task.Run(async () =>
             {
                 var allPartitions = new List<PartitionInfo>();
-                var diskTargetsTask = GetAllVmHardDrivesAsync(vmName);
-                diskTargetsTask.Wait();
-                var diskTargets = diskTargetsTask.Result;
+                var diskTargets = await GetAllVmHardDrivesAsync(vmName);
 
                 foreach (var target in diskTargets)
                 {
@@ -401,24 +359,16 @@ namespace ExHyperV.Services
                     {
                         if (target.IsPhysical)
                         {
-                            var setupScript = $@"
-                        Set-Disk -Number {target.PhysicalDiskNumber} -IsOffline $false -ErrorAction SilentlyContinue
-                        Set-Disk -Number {target.PhysicalDiskNumber} -IsReadOnly $true -ErrorAction SilentlyContinue
-                        Start-Sleep -Milliseconds 500
-                        (Get-Disk -Number {target.PhysicalDiskNumber}).Number";
-                            var res = Utils.Run(setupScript);
-                            if (res != null && res.Count > 0) hostDiskNumber = target.PhysicalDiskNumber;
+                            await _storageService.SetDiskOfflineStatusAsync(target.PhysicalDiskNumber, false);
+                            await _storageService.SetDiskReadOnlyAsync(target.PhysicalDiskNumber, true);
+                            await Task.Delay(500);
+                            hostDiskNumber = target.PhysicalDiskNumber;
                         }
                         else
                         {
-                            var mountScript = $@"
-                        $path = '{target.Path}'
-                        Dismount-DiskImage -ImagePath $path -ErrorAction SilentlyContinue
-                        $img = Mount-DiskImage -ImagePath $path -NoDriveLetter -PassThru -ErrorAction Stop
-                        ($img | Get-Disk).Number";
-                            var mountResult = Utils.Run(mountScript);
-                            if (mountResult != null && mountResult.Count > 0)
-                                int.TryParse(mountResult[0].ToString(), out hostDiskNumber);
+                            var mountResult = await _storageService.MountVhdxAsync(target.Path);
+                            if (mountResult.Success)
+                                hostDiskNumber = mountResult.DiskNumber;
                         }
 
                         if (hostDiskNumber != -1)
@@ -444,12 +394,12 @@ namespace ExHyperV.Services
                     {
                         if (target.IsPhysical)
                         {
-                            Utils.Run($"Set-Disk -Number {target.PhysicalDiskNumber} -IsReadOnly $false -ErrorAction SilentlyContinue");
-                            Utils.Run($"Set-Disk -Number {target.PhysicalDiskNumber} -IsOffline $true -ErrorAction SilentlyContinue");
+                            await _storageService.SetDiskReadOnlyAsync(target.PhysicalDiskNumber, false);
+                            await _storageService.SetDiskOfflineStatusAsync(target.PhysicalDiskNumber, true);
                         }
                         else if (!string.IsNullOrEmpty(target.Path))
                         {
-                            Utils.Run($"Dismount-DiskImage -ImagePath '{target.Path}' -ErrorAction SilentlyContinue");
+                            await _storageService.DismountVhdxAsync(target.Path);
                         }
                     }
                 }
@@ -459,258 +409,107 @@ namespace ExHyperV.Services
         #endregion
 
         #region GPU 分配与解绑
-        public Task<(bool Success, string Message)> AssignGpuPartitionAsync(string vmName, string gpuInstancePath)
+        public async Task<(bool Success, string Message)> AssignGpuPartitionAsync(string vmName, string gpuInstancePath)
         {
-            return Task.Run(async () =>
+            try
             {
-                bool isWin10 = !IsWindows11OrGreater();
-                var disabledGpuInstanceIds = new List<string>();
+                // 1. 查 Msvm_PartitionableGpu 拿 WMI 对象路径
+                var gpuResp = await WmiApi.QueryAsync(
+                    "SELECT * FROM Msvm_PartitionableGpu",
+                    obj => new { WmiPath = obj.Path.Path, Name = obj["Name"]?.ToString() ?? "" });
+                if (!gpuResp.HasData) return (false, Properties.Resources.Error_Gpu_NoPartition);
+                var matched = gpuResp.Data.FirstOrDefault(g =>
+                    string.Equals(g.Name, gpuInstancePath, StringComparison.OrdinalIgnoreCase));
+                if (matched == null) return (false, Properties.Resources.Error_Gpu_NoPartition);
+                string gpuWmiPath = matched.WmiPath;
 
-                string NormalizeForComparison(string deviceId)
-                {
-                    if (string.IsNullOrWhiteSpace(deviceId)) return string.Empty;
-                    var normalizedId = deviceId.Replace('#', '\\').ToUpper();
-                    if (normalizedId.StartsWith(@"\\?\")) normalizedId = normalizedId.Substring(4);
-                    int suffixIndex = normalizedId.IndexOf('{');
-                    if (suffixIndex != -1)
+                // 2. 查 ResourcePool → AllocationCapabilities → Default 模板
+                var ms = WmiConnectionCache.GetManagementScope(WmiScope.HyperV, WmiContext.Local);
+                using var poolSearcher = new ManagementObjectSearcher(ms,
+                    new ObjectQuery("SELECT * FROM Msvm_ResourcePool WHERE ResourceType = 32770 AND ResourceSubType = 'Microsoft:Hyper-V:GPU Partition' AND Primordial = TRUE"));
+                using var poolCollection = poolSearcher.Get();
+                using var pool = poolCollection.Cast<ManagementObject>().FirstOrDefault();
+                if (pool == null) return (false, Properties.Resources.Error_Gpu_NoPartition);
+
+                using var capsCollection = pool.GetRelated("Msvm_AllocationCapabilities");
+                using var caps = capsCollection.Cast<ManagementObject>().FirstOrDefault();
+                if (caps == null) return (false, Properties.Resources.Error_Gpu_NoPartition);
+
+                using var templateCollection = caps.GetRelated("Msvm_GpuPartitionSettingData");
+                using var template = templateCollection.Cast<ManagementObject>()
+                    .FirstOrDefault(t => t["InstanceID"]?.ToString()?.EndsWith("\\Default", StringComparison.OrdinalIgnoreCase) == true);
+                if (template == null) return (false, Properties.Resources.Error_Gpu_NoPartition);
+
+                // 3. 设置 HostResource 为 WMI 路径，清空 InstanceID
+                template["InstanceID"] = null;
+                template["HostResource"] = new string[] { gpuWmiPath };
+                string gpuXml = template.GetText(TextFormat.CimDtd20);
+
+                // 4. 查 VM SettingData 路径
+                var vmSettingResp = await WmiApi.QueryFirstAsync(
+                    $"SELECT * FROM Msvm_VirtualSystemSettingData WHERE ElementName = '{WmiApi.Escape(vmName)}' AND VirtualSystemType = 'Microsoft:Hyper-V:System:Realized'",
+                    obj => obj.Path.Path);
+                if (!vmSettingResp.HasData) return (false, "VM setting not found");
+
+                // 5. AddResourceSettings
+                var result = await WmiApi.InvokeAsync(
+                    "SELECT * FROM Msvm_VirtualSystemManagementService",
+                    "AddResourceSettings",
+                    p =>
                     {
-                        int lastSeparatorIndex = normalizedId.LastIndexOf('\\', suffixIndex);
-                        if (lastSeparatorIndex != -1) normalizedId = normalizedId.Substring(0, lastSeparatorIndex);
-                    }
-                    return normalizedId;
-                }
+                        p["AffectedConfiguration"] = vmSettingResp.Data;
+                        p["ResourceSettings"] = new string[] { gpuXml };
+                    });
 
-                try
-                {
-                    if (isWin10)
-                    {
-                        var allHostGpus = await GetHostGpusAsync();
-                        string normalizedSelectedGpuId = NormalizeForComparison(gpuInstancePath);
+                if (!result.Success) return (false, result.Error);
 
-                        foreach (var gpu in allHostGpus)
-                        {
-                            if (!gpu.InstanceId.ToUpper().StartsWith("PCI\\")) continue;
-                            string normalizedCurrentGpuId = NormalizeForComparison(gpu.InstanceId);
-                            if (!string.Equals(normalizedCurrentGpuId, normalizedSelectedGpuId, StringComparison.OrdinalIgnoreCase))
-                            {
-                                disabledGpuInstanceIds.Add(gpu.InstanceId);
-                            }
-                        }
+                // 6. 验证
+                var vmGuidResp = await WmiApi.QueryFirstAsync(
+                    $"SELECT * FROM Msvm_ComputerSystem WHERE ElementName = '{WmiApi.Escape(vmName)}'",
+                    obj => obj["Name"]?.ToString() ?? "");
+                string vmGuid = vmGuidResp.Data ?? "";
 
-                        if (disabledGpuInstanceIds.Any())
-                        {
-                            foreach (var disabledId in disabledGpuInstanceIds)
-                            {
-                                Utils.Run($"Disable-PnpDevice -InstanceId '{disabledId}' -Confirm:$false");
-                            }
-                            await Task.Delay(2000);
-                        }
-                    }
+                var verifyResp = await WmiApi.QueryFirstAsync(
+                    $"SELECT * FROM Msvm_GpuPartitionSettingData WHERE InstanceID LIKE 'Microsoft:{vmGuid}%'",
+                    obj => obj["InstanceID"]?.ToString() ?? "");
+                if (!verifyResp.HasData) return (false, Properties.Resources.Error_Gpu_NoPartition);
 
-                    string addGpuCommand = isWin10
-                        ? $"Add-VMGpuPartitionAdapter -VMName '{vmName}'"
-                        : $"Add-VMGpuPartitionAdapter -VMName '{vmName}' -InstancePath '{gpuInstancePath}'";
-
-                    Utils.Run(addGpuCommand);
-
-                    var verifyResult = Utils.Run($"Get-VMGpuPartitionAdapter -VMName '{vmName}'");
-                    if (verifyResult == null || verifyResult.Count == 0)
-                    {
-                        return (false, Properties.Resources.Error_Gpu_NoPartition);
-                    }
-
-                    string gpuTag = $"[AssignedGPU:{gpuInstancePath}]";
-                    string updateNotesScript = $@"
-                $vm = Get-VM -Name '{vmName}';
-                $currentNotes = $vm.Notes;
-                $cleanedNotes = $currentNotes -replace '\[AssignedGPU:[^\]]+\]', '';
-                $newNotes = ($cleanedNotes.Trim() + ' ' + '{gpuTag}').Trim();
-                Set-VM -VM $vm -Notes $newNotes;
-            ";
-                    Utils.Run(updateNotesScript);
-
-                    return (true, "OK");
-                }
-                catch (Exception ex) { return (false, ex.Message); }
-                finally
-                {
-                    if (disabledGpuInstanceIds.Any())
-                    {
-                        await Task.Delay(1000);
-                        foreach (var instanceId in disabledGpuInstanceIds)
-                        {
-                            Utils.Run($"Enable-PnpDevice -InstanceId '{instanceId}' -Confirm:$false");
-                        }
-                    }
-                }
-            });
+                return (true, "OK");
+            }
+            catch (Exception ex) { return (false, ex.Message); }
         }
-
-        public Task<string> AddGpuPartitionAsync(string vmName, string gpuInstancePath, string gpuManu, PartitionInfo selectedPartition, string id, SshCredentials credentials = null, Action<string> progressCallback = null, CancellationToken cancellationToken = default)
+        public async Task<bool> RemoveGpuPartitionAsync(string vmName, string adapterId)
         {
-            return Task.Run(async () =>
+            try
             {
-                bool isWin10 = !IsWindows11OrGreater();
-                var disabledGpuInstanceIds = new List<string>();
-                int partitionableGpuCount = 0;
+                // 1. 查 GpuPartitionSettingData 拿对象路径
+                string escapedId = adapterId.Replace("\\", "\\\\");
+                var adapterResp = await WmiApi.QueryFirstAsync(
+                    $"SELECT * FROM Msvm_GpuPartitionSettingData WHERE InstanceID = '{escapedId}'",
+                    obj => obj.Path.Path);
+                if (!adapterResp.HasData) return false;
 
-                string NormalizeForComparison(string deviceId)
-                {
-                    if (string.IsNullOrWhiteSpace(deviceId)) return string.Empty;
-                    var normalizedId = deviceId.Replace('#', '\\').ToUpper();
-                    if (normalizedId.StartsWith(@"\\?\")) normalizedId = normalizedId.Substring(4);
-                    int suffixIndex = normalizedId.IndexOf('{');
-                    if (suffixIndex != -1)
+                // 2. RemoveResourceSettings
+                var result = await WmiApi.InvokeAsync(
+                    "SELECT * FROM Msvm_VirtualSystemManagementService",
+                    "RemoveResourceSettings",
+                    p => p["ResourceSettings"] = new string[] { adapterResp.Data });
+                if (!result.Success) return false;
+
+                // 3. Notes 清理
+                await WmiApi.WithObjectAsync(
+                    $"SELECT * FROM Msvm_VirtualSystemSettingData WHERE ElementName = '{WmiApi.Escape(vmName)}' AND VirtualSystemType = 'Microsoft:Hyper-V:System:Realized'",
+                    obj =>
                     {
-                        int lastSeparatorIndex = normalizedId.LastIndexOf('\\', suffixIndex);
-                        if (lastSeparatorIndex != -1) normalizedId = normalizedId.Substring(0, lastSeparatorIndex);
-                    }
-                    return normalizedId;
-                }
+                        string current = obj["Notes"] is string[] arr ? string.Join("\n", arr) : obj["Notes"]?.ToString() ?? "";
+                        if (Regex.IsMatch(current, @"\[AssignedGPU:[^\]]+\]"))
+                            obj["Notes"] = new string[] { Regex.Replace(current, @"\[AssignedGPU:[^\]]+\]", "").Trim() };
+                    });
 
-                void Log(string message) => progressCallback?.Invoke(message);
-
-                try
-                {
-                    Utils.AddGpuAssignmentStrategyReg();
-                    Utils.ApplyGpuPartitionStrictModeFix();
-
-                    if (selectedPartition != null)
-                    {
-                        var vmStateResult = Utils.Run($"(Get-VM -Name '{vmName}').State");
-                        if (vmStateResult == null || vmStateResult.Count == 0 || vmStateResult[0].ToString() != "Off")
-                        {
-                            return string.Format(Properties.Resources.Error_VmMustBeOff, vmName);
-                        }
-                    }
-
-                    if (isWin10)
-                    {
-                        var allHostGpus = await GetHostGpusAsync();
-                        partitionableGpuCount = allHostGpus.Count(gpu => !string.IsNullOrEmpty(gpu.Pname));
-                        string normalizedSelectedGpuId = NormalizeForComparison(gpuInstancePath);
-
-                        foreach (var gpu in allHostGpus)
-                        {
-                            if (!gpu.InstanceId.ToUpper().StartsWith("PCI\\")) continue;
-                            string normalizedCurrentGpuId = NormalizeForComparison(gpu.InstanceId);
-                            if (!string.Equals(normalizedCurrentGpuId, normalizedSelectedGpuId, StringComparison.OrdinalIgnoreCase))
-                            {
-                                disabledGpuInstanceIds.Add(gpu.InstanceId);
-                            }
-                        }
-
-                        if (disabledGpuInstanceIds.Any())
-                        {
-                            foreach (var disabledId in disabledGpuInstanceIds)
-                            {
-                                Utils.Run($"Disable-PnpDevice -InstanceId '{disabledId}' -Confirm:$false");
-                            }
-                            await Task.Delay(2000);
-                        }
-                    }
-
-                    string addGpuCommand = isWin10
-                        ? $"Add-VMGpuPartitionAdapter -VMName '{vmName}'"
-                        : $"Add-VMGpuPartitionAdapter -VMName '{vmName}' -InstancePath '{gpuInstancePath}'";
-
-                    string vmConfigScript;
-                    if (selectedPartition == null)
-                    {
-                        vmConfigScript = addGpuCommand;
-                    }
-                    else
-                    {
-                        vmConfigScript = $@"
-                        Set-VM -GuestControlledCacheTypes $true -VMName '{vmName}';
-                        Set-VM -HighMemoryMappedIoSpace 64GB -VMName '{vmName}';
-                        Set-VM -LowMemoryMappedIoSpace 1GB -VMName '{vmName}';
-                        {addGpuCommand};
-                        ";
-                    }
-                    Utils.Run(vmConfigScript);
-                    if (isWin10)
-                    {
-                        string gpuTag = $"[AssignedGPU:{gpuInstancePath}]";
-                        string updateNotesScript = $@"
-                        $vm = Get-VM -Name '{vmName}';
-                        $currentNotes = $vm.Notes;
-                        $cleanedNotes = $currentNotes -replace '\[AssignedGPU:[^\]]+\]', '';
-                        $newNotes = ($cleanedNotes.Trim() + ' ' + '{gpuTag}').Trim();
-                        Set-VM -VM $vm -Notes $newNotes;
-                        ";
-                        Utils.Run(updateNotesScript);
-                    }
-
-                    if (selectedPartition != null)
-                    {
-                        if (selectedPartition.OsType == OperatingSystemType.Windows)
-                        {
-                            Log(Properties.Resources.Msg_Gpu_PreparingDisk);
-                            var diskTarget = new VmDiskTarget
-                            {
-                                IsPhysical = selectedPartition.IsPhysicalDisk,
-                                Path = selectedPartition.IsPhysicalDisk ? null : selectedPartition.DiskPath,
-                                PhysicalDiskNumber = selectedPartition.IsPhysicalDisk ? int.Parse(selectedPartition.DiskPath) : 0
-                            };
-
-                            string injectionResult = await InjectWindowsDriversAsync(vmName, diskTarget, selectedPartition, gpuManu, id, Log);
-
-                            if (injectionResult != "OK") return injectionResult;
-                        }
-                        else if (selectedPartition.OsType == OperatingSystemType.Linux)
-                        {
-                            return "OK";
-                        }
-                    }
-
-                    if (isWin10 && partitionableGpuCount > 1) Utils.Run($"Start-VM -Name '{vmName}'");
-                    return "OK";
-                }
-                catch (Exception ex)
-                {
-                    Log(string.Format(Properties.Resources.Error_FatalExceptionOccurred, ex.Message));
-                    return string.Format(Properties.Resources.Error_OperationFailed, ex.Message);
-                }
-                finally
-                {
-                    if (disabledGpuInstanceIds.Any())
-                    {
-                        await Task.Delay(1000);
-                        foreach (var instanceId in disabledGpuInstanceIds)
-                        {
-                            Utils.Run($"Enable-PnpDevice -InstanceId '{instanceId}' -Confirm:$false");
-                        }
-                    }
-                    if (isWin10 && partitionableGpuCount > 1)
-                    {
-                        Log(Properties.Resources.Warning_Win10GpuAssignmentNotPersistent);
-                    }
-                }
-            });
-        }
-
-        public Task<bool> RemoveGpuPartitionAsync(string vmName, string adapterId)
-        {
-            return Task.Run(async () =>
-            {
-                var results = await Utils.Run2($@"Remove-VMGpuPartitionAdapter -VMName '{vmName}' -AdapterId '{adapterId}' -Confirm:$false");
-                if (results != null)
-                {
-                    string cleanupNotesScript = $@"
-                    $vm = Get-VM -Name '{vmName}';
-                    $currentNotes = $vm.Notes;
-                    if ($currentNotes -match '\[AssignedGPU:[^\]]+\]') {{
-                    $cleanedNotes = $currentNotes -replace '\[AssignedGPU:[^\]]+\]', '';
-                    Set-VM -VM $vm -Notes $cleanedNotes.Trim();
-                        }}
-                    ";
-                    Utils.Run(cleanupNotesScript);
-                    return true;
-                }
-                return false;
-            });
-        }
+                return true;
+            }
+            catch { return false; }
+        }        
         #endregion
 
         #region Windows 驱动环境注入
@@ -743,6 +542,8 @@ namespace ExHyperV.Services
             int savedCtrlNum = 0;
             int savedCtrlLoc = 0;
             bool isPhysical = diskTarget.IsPhysical;
+            bool detachSuccess = false;
+
 
             void Log(string msg) => progressCallback?.Invoke(msg);
 
@@ -752,66 +553,43 @@ namespace ExHyperV.Services
                 {
                     Log(string.Format(Properties.Resources.Msg_Gpu_DismountingDisk, diskTarget.PhysicalDiskNumber));
                     hostDiskNumber = diskTarget.PhysicalDiskNumber;
-                    var detachScript = $@"
-        $ErrorActionPreference = 'Stop'
-        $vmDisk = Get-VMHardDiskDrive -VMName '{vmName}' | Where-Object {{ $_.DiskNumber -eq {hostDiskNumber} }}
-        if ($vmDisk) {{
-            $out = ""$($vmDisk.ControllerType),$($vmDisk.ControllerNumber),$($vmDisk.ControllerLocation)""
-            Remove-VMHardDiskDrive -VMHardDiskDrive $vmDisk -ErrorAction Stop
-            $out
-        }} else {{ throw 'DiskNotFoundInVm' }}";
+                    var detachResult = await _storageService.DetachPhysicalDiskAsync(vmName, hostDiskNumber);
+                    if (!detachResult.Success) return Properties.Resources.Error_Gpu_DiskNotFound;
+                    savedCtrlType = detachResult.CtrlType;
+                    savedCtrlNum = detachResult.CtrlNum;
+                    savedCtrlLoc = detachResult.CtrlLoc;
+                    detachSuccess = true;
 
-                    var detachRes = Utils.Run(detachScript);
-                    if (detachRes == null || detachRes.Count == 0) return Properties.Resources.Error_Gpu_DiskNotFound;
 
-                    var parts = detachRes[0].ToString().Split(',');
-                    savedCtrlType = parts[0];
-                    savedCtrlNum = int.Parse(parts[1]);
-                    savedCtrlLoc = int.Parse(parts[2]);
 
-                    Utils.Run($@"Set-Disk -Number {hostDiskNumber} -IsOffline $false -ErrorAction Stop");
-                    Utils.Run($@"Set-Disk -Number {hostDiskNumber} -IsReadOnly $false -ErrorAction Stop");
-                    Utils.Run("Update-HostStorageCache");
+                    await _storageService.SetDiskOfflineStatusAsync(hostDiskNumber, false);
+                    await _storageService.SetDiskReadOnlyAsync(hostDiskNumber, false);
+
                 }
                 else
                 {
-                    Log(string.Format(Properties.Resources.Msg_Gpu_MountingVhd, Path.GetFileName(diskTarget.Path)));
-                    var mountRes = Utils.Run($@"
-        Dismount-DiskImage -ImagePath '{diskTarget.Path}' -ErrorAction SilentlyContinue
-        $img = Mount-DiskImage -ImagePath '{diskTarget.Path}' -NoDriveLetter -PassThru -ErrorAction Stop
-        ($img | Get-Disk).Number");
-
-                    if (mountRes == null || !int.TryParse(mountRes[0].ToString(), out hostDiskNumber))
+                    var mountResult = await _storageService.MountVhdxAsync(diskTarget.Path);
+                    if (!mountResult.Success)
                         return Properties.Resources.Error_Gpu_MountVhdFailed;
+                    hostDiskNumber = mountResult.DiskNumber;
                 }
 
                 Log(string.Format(Properties.Resources.Msg_Gpu_AssignTempDrive, hostDiskNumber, partition.PartitionNumber));
 
                 char suggestedLetter = GetFreeDriveLetter();
-                var assignRes = Utils.Run($@"
-$p = Get-Partition -DiskNumber {hostDiskNumber} | Where-Object PartitionNumber -eq {partition.PartitionNumber}
-Set-Partition -InputObject $p -NewDriveLetter '{suggestedLetter}' -ErrorAction Stop
-'{suggestedLetter}'");
+                var assignResult = await _storageService.AssignPartitionDriveLetterAsync(hostDiskNumber, partition.PartitionNumber, suggestedLetter);
+                if (!assignResult.Success)
+                    return string.Format(Properties.Resources.Error_Gpu_InjectFailed, "Failed to assign drive letter");
+                assignedDriveLetter = $"{suggestedLetter}:\\";
 
-                assignedDriveLetter = assignRes[0].ToString().TrimEnd(':') + ":";
+                var volResp = await WmiApi.QueryFirstCimAsync(
+                    $"SELECT * FROM MSFT_Volume WHERE DriveLetter = '{assignedDriveLetter[0]}'",
+                    obj => obj["FileSystem"]?.ToString() ?? "",
+                    WmiScope.Storage);
 
-                var checkStatus = Utils.Run($@"
-$drive = '{assignedDriveLetter[0]}'
-$v = Get-BitLockerVolume -MountPoint ""$($drive):"" -ErrorAction SilentlyContinue
-$gV = Get-Volume -DriveLetter $drive -ErrorAction SilentlyContinue
-
-$isBL = $v -ne $null
-$fs = if ($gV) {{ $gV.FileSystem }} else {{ '' }}
-$prot = if ($v) {{ [string]$v.ProtectionStatus }} else {{ '' }}
-
-if ($isBL -and ([string]::IsNullOrWhiteSpace($fs) -or $prot -eq 'Unknown')) {{ return 'LOCKED' }}
-return 'OK'
-");
-
-                if (checkStatus != null && checkStatus.Count > 0 && checkStatus[0].ToString() == "LOCKED")
-                {
+                if (volResp.HasData && string.IsNullOrWhiteSpace(volResp.Data))
                     return Properties.Resources.Error_Gpu_BitLocker;
-                }
+
 
                 if (!Directory.Exists(Path.Combine(assignedDriveLetter, "Windows", "System32")))
                 {
@@ -834,10 +612,6 @@ return 'OK'
                 }))
                 {
                     await p.WaitForExitAsync();
-                    if (p.ExitCode >= 8)
-                    {
-                        Log($"[WARNING] Driver file sync encountered errors (robocopy exit code: {p.ExitCode})");
-                    }
                 }
 
                 PromoteRegistryDefinedFiles(assignedDriveLetter); // 微软注册表文件提取
@@ -845,12 +619,9 @@ return 'OK'
                 if (gpuManu.Contains("NVIDIA", StringComparison.OrdinalIgnoreCase))
                 {
                     Log(Properties.Resources.Msg_Gpu_InjectingReg);
-                    string regResult = NvidiaReg(assignedDriveLetter);
-                    if (regResult != "OK")
-                    {
-                        Log($"[WARNING] NVIDIA registry injection issue: {regResult}");
-                    }
+                    NvidiaReg(assignedDriveLetter);
                     PromoteNvidiaFiles(assignedDriveLetter);
+                    await NvidiaProgramFoldersAsync(assignedDriveLetter, Log);
                 }
                 else if (gpuManu.Contains("Intel", StringComparison.OrdinalIgnoreCase))
                 {
@@ -871,43 +642,28 @@ return 'OK'
             catch (Exception ex) { return string.Format(Properties.Resources.Error_Gpu_InjectFailed, ex.Message); }
             finally
             {
-                if (isPhysical && hostDiskNumber != -1)
+                if (isPhysical && hostDiskNumber != -1 && detachSuccess)
                 {
                     Log(Properties.Resources.Msg_Gpu_Remounting);
                     try
                     {
-                        Utils.Run($@"
-            Get-Partition -DiskNumber {hostDiskNumber} | Where-Object DriveLetter -ne $null | ForEach-Object {{
-                Remove-PartitionAccessPath -DiskNumber $_.DiskNumber -PartitionNumber $_.PartitionNumber -AccessPath ""$($_.DriveLetter):"" -ErrorAction SilentlyContinue
-            }}");
-                        var offlineScript = $@"
-            $n = {hostDiskNumber}
-            Set-Disk -Number $n -IsOffline $true -ErrorAction Stop
-            for($i=0; $i -lt 10; $i++) {{
-                if ((Get-Disk -Number $n).IsOffline) {{ return 'OK' }}
-                Start-Sleep -Milliseconds 500
-            }}
-            throw '磁盘脱机超时'";
+                        await _storageService.RemoveAllPartitionAccessPathsAsync(hostDiskNumber);
+                        await _storageService.SetDiskOfflineStatusAsync(hostDiskNumber, true);
+                        await Task.Delay(1000);
 
-                        Utils.Run(offlineScript);
-                        Thread.Sleep(1000);
-
-                        var reattachScript = $@"
-            Add-VMHardDiskDrive -VMName '{vmName}' `
-                                -ControllerType '{savedCtrlType}' `
-                                -ControllerNumber {savedCtrlNum} `
-                                -ControllerLocation {savedCtrlLoc} `
-                                -DiskNumber {hostDiskNumber} `
-                                -ErrorAction Stop";
-                        Utils.Run(reattachScript);
+                        await _storageService.AddDriveAsync(
+                            vmName, savedCtrlType, savedCtrlNum, savedCtrlLoc,
+                            "HardDisk", pathOrNumber: hostDiskNumber.ToString(),
+                            isPhysical: true);
                         Log(Properties.Resources.Msg_Gpu_RemountSuccess);
+
                     }
                     catch (Exception ex) { Log(string.Format(Properties.Resources.Error_Gpu_RemountFailed, ex.Message)); }
                 }
                 else if (!string.IsNullOrEmpty(diskTarget?.Path))
                 {
                     Log(Properties.Resources.Msg_Gpu_Unmounting);
-                    Utils.Run($"Dismount-DiskImage -ImagePath '{diskTarget.Path}' -ErrorAction SilentlyContinue");
+                    await _storageService.DismountVhdxAsync(diskTarget.Path);
                 }
             }
         }
@@ -1200,22 +956,31 @@ return 'OK'
                 string guestRepo = Path.Combine(assignedDriveLetter, "Windows", "System32", "HostDriverStore", "FileRepository");
                 string hostDestDir = Path.Combine(assignedDriveLetter, "Windows", targetSubDir);
 
-                // 1. 如果目标子目录不存在，先创建它
                 if (!Directory.Exists(hostDestDir))
                 {
                     Directory.CreateDirectory(hostDestDir);
                 }
-
-                // --- 新增：针对 SyChpe32 等系统目录的脱权处理 ---
-                // 只有当路径包含 SyChpe32 或 System32 时才触发，避免大范围修改权限
-                if (targetSubDir.Contains("SyChpe32", StringComparison.OrdinalIgnoreCase) ||
+                if (targetSubDir.Equals("System32", StringComparison.OrdinalIgnoreCase) ||
+                    targetSubDir.Contains("SyChpe32", StringComparison.OrdinalIgnoreCase) ||
                     targetSubDir.Contains("SysWOW64", StringComparison.OrdinalIgnoreCase))
                 {
-                    // 获取所有权 (Administrators 组)
                     ExecuteCommand($"cmd /c takeown /f \"{hostDestDir}\" /a");
-                    // 授予完全控制权限 (WELL-KNOWN SID S-1-5-32-544 代表管理员组)
                     ExecuteCommand($"cmd /c icacls \"{hostDestDir}\" /grant *S-1-5-32-544:F");
                 }
+
+                string hostLinkPath = Path.Combine(hostDestDir, targetName);
+                if (System.IO.File.Exists(hostLinkPath) || System.IO.Directory.Exists(hostLinkPath))
+                {
+                    return;
+                }
+                try
+                {
+                    if (System.IO.File.GetAttributes(hostLinkPath) != (System.IO.FileAttributes)(-1))
+                    {
+                        ExecuteCommand($"cmd /c del /f /q \"{hostLinkPath}\"");
+                    }
+                }
+                catch {}
 
                 var foundFiles = new DirectoryInfo(guestRepo)
                                     .GetFiles(sourceName, SearchOption.AllDirectories)
@@ -1226,17 +991,7 @@ return 'OK'
 
                 string hostSourceFile = foundFiles[0].FullName;
                 string guestInternalTarget = hostSourceFile.Replace(assignedDriveLetter, "C:");
-                string hostLinkPath = Path.Combine(hostDestDir, targetName);
 
-                // --- 新增：针对单个目标文件的脱权（如果文件已存在） ---
-                if (File.Exists(hostLinkPath))
-                {
-                    ExecuteCommand($"cmd /c takeown /f \"{hostLinkPath}\" /a");
-                    ExecuteCommand($"cmd /c icacls \"{hostLinkPath}\" /grant *S-1-5-32-544:F");
-                    File.Delete(hostLinkPath);
-                }
-
-                // 执行 mklink
                 ExecuteCommand($"cmd /c mklink \"{hostLinkPath}\" \"{guestInternalTarget}\"");
             }
             catch (Exception ex)
@@ -1261,8 +1016,7 @@ return 'OK'
                 string targetText = @"HKEY_LOCAL_MACHINE\OfflineSystem\ControlSet001\Services\nvlddmkm";
                 string regContent = File.ReadAllText(tempRegFile);
                 regContent = regContent.Replace(originalText, targetText);
-                regContent = regContent.Replace("\\DriverStore\\", "\\HostDriverStore\\");
-                regContent = regContent.Replace("/DriverStore/", "/HostDriverStore/");
+                regContent = regContent.Replace("DriverStore", "HostDriverStore");
                 File.WriteAllText(tempRegFile, regContent);
                 ExecuteCommand($@"reg import ""{tempRegFile}""");
 
@@ -1278,6 +1032,43 @@ return 'OK'
                 if (File.Exists(tempRegFile)) File.Delete(tempRegFile);
             }
         }
+
+        private async Task NvidiaProgramFoldersAsync(string assignedDriveLetter, Action<string> Log)
+        {
+            var sourceFolders = new List<string>
+    {
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "NVIDIA Corporation"),
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "NVIDIA Corporation"),
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "NVIDIA Corporation")
+    };
+
+            foreach (var sourcePath in sourceFolders)
+            {
+                if (!Directory.Exists(sourcePath)) continue;
+                string root = Path.GetPathRoot(sourcePath);
+                string relativePath = sourcePath.Substring(root.Length);
+
+                string targetPath = Path.Combine(assignedDriveLetter, relativePath);
+
+                Log?.Invoke(string.Format("Syncing: {0} -> {1}", sourcePath, targetPath));
+
+                if (!Directory.Exists(targetPath))
+                {
+                    Directory.CreateDirectory(targetPath);
+                }
+                using (Process p = Process.Start(new ProcessStartInfo
+                {
+                    FileName = "robocopy.exe",
+                    Arguments = $"\"{sourcePath}\" \"{targetPath}\" /E /R:1 /W:1 /MT:32 /XJ /NDL /NJH /NJS /NC /NS",
+                    CreateNoWindow = true,
+                    UseShellExecute = false
+                }))
+                {
+                    await p.WaitForExitAsync();
+                }
+            }
+        }
+
         #endregion
 
         #region Linux 驱动环境与脚本部署
@@ -1320,7 +1111,7 @@ return 'OK'
                     var item = ParseScriptHeader(content);
                     item.IsLocal = true;
                     // 【修改点】：添加“本地”标识
-                    item.Name = string.Format(Properties.Resources.VmGPUService_1, item.Name);
+                    item.Name = string.Format(Properties.Resources.VmGPUService_LogLocal, item.Name);
                     item.SourcePathOrUrl = file;
                     item.FileName = Path.GetFileName(file);
                     allScripts.Add(item);
@@ -1346,7 +1137,7 @@ return 'OK'
                     {
                         item.IsLocal = false;
                         // 【修改点】：添加“在线”标识
-                        item.Name = string.Format(Properties.Resources.VmGPUService_2, item.Name);
+                        item.Name = string.Format(Properties.Resources.VmGPUService_LogOnline, item.Name);
                         item.SourcePathOrUrl = $"{ScriptBaseUrl}{item.FileName}";
                         allScripts.Add(item);
                     }
@@ -1387,20 +1178,18 @@ return 'OK'
                 try
                 {
                     // --- 阶段 1: 准备工作 (IP 嗅探与连接) ---
-                    var currentState = await GetVmStateAsync(vmName);
-                    if (currentState != "Running")
+                    var currentState = await _queryService.GetVmStateAsync(vmName);
+                    if (currentState != "2")
                     {
                         Log("[ExHyperV] Starting VM...");
-                        Utils.Run($"Start-VM -Name '{vmName}'");
+                        await _powerService.ExecuteControlActionAsync(vmName, "Start");
                         await Task.Delay(5000);
                     }
 
                     Log(Properties.Resources.Msg_Gpu_LinuxWaitingIp);
-                    string getMacScript = $"(Get-VMNetworkAdapter -VMName '{vmName}').MacAddress | Select-Object -First 1";
-                    var macResult = await Utils.Run2(getMacScript);
-                    if (macResult == null || macResult.Count == 0) return "Failed to get VM MAC Address";
-
-                    string macAddress = Regex.Replace(macResult[0].ToString(), "(.{2})", "$1:").TrimEnd(':');
+                    var adapters = await _networkService.GetNetworkAdaptersAsync(vmName);
+                    if (adapters == null || adapters.Count == 0) return "Failed to get VM MAC Address";
+                    string macAddress = adapters[0].MacAddress;
                     string vmIpAddress = await Utils.GetVmIpAddressAsync(vmName, macAddress);
                     string targetIp = Utils.SelectBestIpv4Address(!string.IsNullOrWhiteSpace(credentials.Host) ? credentials.Host : vmIpAddress);
 
@@ -1479,7 +1268,7 @@ return 'OK'
                         if (rebootNeeded)
                         {
                             Log("!!! VM Reboot required. Restarting now...");
-                            Utils.Run($"Restart-VM -Name '{vmName}' -Force");
+                            await _powerService.ExecuteControlActionAsync(vmName, "Restart");
                             await Task.Delay(10000); // 等待开始关机
                             if (!await WaitForVmToBeResponsiveAsync(credentials.Host, credentials.Port, ct))
                                 return "VM failed to come back online after reboot.";

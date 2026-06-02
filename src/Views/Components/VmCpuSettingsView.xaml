@@ -9,7 +9,7 @@
              xmlns:properties="clr-namespace:ExHyperV.Properties"
              xmlns:converters="clr-namespace:ExHyperV.Converters"
              mc:Ignorable="d"
-             d:DesignHeight="850" d:DesignWidth="1000">
+             d:DesignHeight="1200" d:DesignWidth="1000">
     <UserControl.Resources>
         <converters:InverseBooleanConverter x:Key="InverseBooleanConverter"/>
         <converters:BooleanToVisibilityConverter x:Key="BoolToVis" />
@@ -76,7 +76,15 @@
                 <ColumnDefinition Width="*"/>
                 <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
-            <TextBlock Text="{x:Static properties:Resources.Label_ProcessorSettings}" FontSize="20" FontWeight="SemiBold" VerticalAlignment="Center" Foreground="{ui:ThemeResource TextFillColorPrimaryBrush}"/>
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                <ui:FontIcon Glyph="&#xF58E;" FontFamily="{DynamicResource SegoeFluentIcons}" FontSize="24" Margin="0,0,12,0" Foreground="{ui:ThemeResource TextFillColorSecondaryBrush}">
+                    <ui:FontIcon.RenderTransform>
+                        <RotateTransform Angle="90"/>
+                    </ui:FontIcon.RenderTransform>
+                    <ui:FontIcon.RenderTransformOrigin>0.5,0.5</ui:FontIcon.RenderTransformOrigin>
+                </ui:FontIcon>
+                <TextBlock Text="{x:Static properties:Resources.Label_ProcessorSettings}" FontSize="20" FontWeight="Regular" VerticalAlignment="Center" Foreground="{ui:ThemeResource TextFillColorPrimaryBrush}"/>
+            </StackPanel>
             <ui:Button Grid.Column="1" Appearance="Transparent" Padding="8" Command="{Binding GoBackToDashboardCommand}">
                 <ui:SymbolIcon Symbol="ArrowLeft24" FontSize="18"/>
             </ui:Button>
@@ -147,6 +155,8 @@
                 <TextBlock Text="{x:Static properties:Resources.AdvancedFeatures}" FontSize="14" Foreground="{ui:ThemeResource TextFillColorPrimaryBrush}" Margin="0,0,0,12"/>
                 <Border Background="{ui:ThemeResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{ui:ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="8" Padding="0" Margin="0,0,0,32">
                     <StackPanel>
+
+                        
                         <Grid Margin="24,16">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*"/>
@@ -230,7 +240,10 @@
                         </Grid>
                         <Rectangle Height="1" Fill="{ui:ThemeResource CardStrokeColorDefaultBrush}" Margin="24,0"/>
 
-                        <Grid Margin="24,16">
+
+                        <!-- 隐藏无效功能 -->
+
+                        <!-- <Grid Margin="24,16">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*"/>
                                 <ColumnDefinition Width="Auto"/>
@@ -246,6 +259,8 @@
                         </Grid>
                         <Rectangle Height="1" Fill="{ui:ThemeResource CardStrokeColorDefaultBrush}" Margin="24,0"/>
 
+                         -->
+                        
                         <Grid Margin="24,16">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*"/>
@@ -308,12 +323,9 @@
                                      IsChecked="{Binding SelectedVm.Processor.EnableSocketTopology}" 
                                      Command="{Binding ApplyChangesCommand}"/>
                         </Grid>
-                    </StackPanel>
-                </Border>
+                        <Rectangle Height="1" Fill="{ui:ThemeResource CardStrokeColorDefaultBrush}" Margin="24,0"/>
 
-                <TextBlock Text="{x:Static properties:Resources.Label_Experimental}" FontSize="14" Foreground="{ui:ThemeResource TextFillColorPrimaryBrush}" Margin="0,0,0,12"/>
-                <Border Background="{ui:ThemeResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{ui:ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="8" Padding="0">
-                    <StackPanel>
+
                         <Grid Margin="24,16">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*"/>
@@ -325,6 +337,49 @@
                             </StackPanel>
                             <ui:Button Grid.Column="1" Content="{x:Static properties:Resources.Button_ConfigAffinity}" Icon="BranchFork24" Padding="16,6" Command="{Binding GoToCpuAffinityCommand}"/>
                         </Grid>
+
+                    </StackPanel>
+                    
+                </Border>
+
+                <TextBlock Text="{x:Static properties:Resources.Label_Experimental}" FontSize="14" Foreground="{ui:ThemeResource TextFillColorPrimaryBrush}" Margin="0,0,0,12"/>
+                <Border Background="{ui:ThemeResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{ui:ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="8" Padding="0">
+                    <StackPanel>
+
+                        <Grid Margin="24,12,24,12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="16"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="24"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+
+                            <TextBlock Grid.Column="0" 
+               Text="{x:Static properties:Resources.VmCpuSettings_LabelCustomCpuName}" 
+               FontSize="14" 
+               VerticalAlignment="Center" 
+               Foreground="{ui:ThemeResource TextFillColorPrimaryBrush}"/>
+
+                            <ui:TextBox Grid.Column="2" 
+                VerticalAlignment="Center"
+                Text="{Binding SelectedVm.Processor.CpuBrandString, UpdateSourceTrigger=PropertyChanged}"
+                IsEnabled="{Binding SelectedVm.IsRunning, Converter={StaticResource InverseBooleanConverter}}"/>
+
+                            <ui:Button Grid.Column="4" 
+           Content="{x:Static properties:Resources.Apply}" 
+           Appearance="Primary"
+           VerticalAlignment="Center" 
+           Padding="16,7"
+           Command="{Binding ApplyChangesCommand}"
+           IsEnabled="{Binding SelectedVm.IsRunning, Converter={StaticResource InverseBooleanConverter}}">
+                                <ui:Button.ToolTip>
+                                    <ToolTip Content="{x:Static properties:Resources.VmCpuSettings_WarnVmOffRequired}" 
+                     Visibility="{Binding SelectedVm.IsRunning, Converter={StaticResource BoolToVis}}"/>
+                                </ui:Button.ToolTip>
+                            </ui:Button>
+                        </Grid>
+
                     </StackPanel>
                 </Border>
             </StackPanel>

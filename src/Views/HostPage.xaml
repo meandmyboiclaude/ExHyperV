@@ -115,7 +115,7 @@
 
                             <!-- 禁用按钮：只有当状态完全正常 (Success) 时，才显示 -->
                             <ui:Button 
-        Content="{x:Static properties:Resources.HostPage_1}" 
+        Content="{x:Static properties:Resources.HostPage_Disable}" 
         Appearance="Secondary"
         Visibility="{Binding HyperVStatus.IsSuccess, Converter={StaticResource BoolToVis}}"
         Command="{Binding DisableHyperVCommand}"/>
@@ -192,8 +192,8 @@
                               ItemsSource="{Binding SchedulerModes}"
                               DisplayMemberPath="Name"
                               SelectedValuePath="Type"
-                              SelectedValue="{Binding CurrentSchedulerType, Mode=TwoWay}"
-                              IsEnabled="{Binding AdminStatus.IsSuccess}">
+                              SelectedValue="{Binding CurrentSchedulerType, Mode=TwoWay}">
+                              
                     </ComboBox>
                 </ui:CardControl>
 
@@ -209,8 +209,8 @@
                         </StackPanel>
                     </ui:CardControl.Header>
 
-                    <ui:ToggleSwitch IsChecked="{Binding IsNumaSpanningEnabled, Mode=TwoWay}"
-                                     IsEnabled="{Binding AdminStatus.IsSuccess}"/>
+                    <ui:ToggleSwitch IsChecked="{Binding IsNumaSpanningEnabled, Mode=TwoWay}"/>
+                                     
                 </ui:CardControl>
 
                 <!-- DDA 策略 -->

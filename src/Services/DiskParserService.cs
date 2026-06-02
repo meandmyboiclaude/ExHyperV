@@ -40,16 +40,16 @@ namespace ExHyperV.Services
                         if (CheckGptSignatureAt(diskStream, 512))
                         {
                             bytesPerSector = 512;
-                            Debug.WriteLine(Properties.Resources.DiskParserService_1);
+                            Debug.WriteLine(Properties.Resources.DiskParser_LogSector512);
                         }
                         else if (CheckGptSignatureAt(diskStream, 4096))
                         {
                             bytesPerSector = 4096;
-                            Debug.WriteLine(Properties.Resources.DiskParserService_2);
+                            Debug.WriteLine(Properties.Resources.DiskParser_LogSector4096);
                         }
                         else
                         {
-                            Debug.WriteLine(Properties.Resources.DiskParserService_3);
+                            Debug.WriteLine(Properties.Resources.DiskParser_LogErrGptNotFound);
                             return partitions;
                         }
 
@@ -64,10 +64,14 @@ namespace ExHyperV.Services
             }
             catch (Exception ex)
             {
-                Debug.WriteLine(string.Format(Properties.Resources.DiskParserService_4, ex.Message));
+                Debug.WriteLine(string.Format(Properties.Resources.DiskParser_LogErrReadFailed, ex.Message));
             }
 
             const long oneGbInBytes = 1024L * 1024 * 1024;
+            Debug.WriteLine($"[DiskParser] devicePath={devicePath}, total partitions before filter={partitions.Count}");
+            foreach (var p in partitions)
+                Debug.WriteLine($"[DiskParser] part={p.PartitionNumber}, size={p.SizeInBytes}, osType={p.OsType}");
+
             return partitions
                 .Where(p => p.SizeInBytes >= oneGbInBytes)
                 .Where(p => p.OsType == OperatingSystemType.Windows || p.OsType == OperatingSystemType.Linux)

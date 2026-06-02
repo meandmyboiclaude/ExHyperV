@@ -98,7 +98,7 @@ namespace ExHyperV.Models
         [ObservableProperty] private int _controllerLocation;
         [ObservableProperty] private string _controllerType;
         [ObservableProperty] private int _controllerNumber;
-
+        [ObservableProperty] private bool _isOptimizing;
         [ObservableProperty] private int _diskNumber;
         [ObservableProperty] private string _diskModel;
 
@@ -148,8 +148,10 @@ namespace ExHyperV.Models
         }
     }
 
+
     public partial class VmMemorySettings : ObservableObject
     {
+
         [ObservableProperty] private long _startup;
         [ObservableProperty] private bool _dynamicMemoryEnabled;
         [ObservableProperty] private long _minimum;
@@ -157,6 +159,24 @@ namespace ExHyperV.Models
         [ObservableProperty] private int _buffer;
         [ObservableProperty] private int _priority;
         [ObservableProperty] private byte? _backingPageSize;
+
+        // --- 实验性功能 ---
+        [ObservableProperty] private byte? _backingType;              // 内存后端类型
+        [ObservableProperty] private uint? _dynMemOperationAlignment;  // 动态内存操作对齐
+        [ObservableProperty] private byte? _memoryAccessTrackingPolicy; // 访问跟踪策略
+        [ObservableProperty] private byte? _memoryAccessTrackingState;  // 访问跟踪状态
+        [ObservableProperty] private bool? _sgxEnabled;                // SGX 开关
+        [ObservableProperty] private double? _sgxSize;                  // SGX 大小
+        [ObservableProperty] private uint? _sgxLaunchControlMode;      // SGX 启动模式
+        [ObservableProperty] private bool? _enableGpaPinning;          // GPA 固定
+        [ObservableProperty] private bool? _cxlEnabled;                // CXL 支持
+        [ObservableProperty] private bool? _enableColdHint;
+        [ObservableProperty] private bool? _enableHotHint;
+        [ObservableProperty] private bool? _enableEpf;
+        [ObservableProperty] private bool? _enablePrivateCompressionStore;
+        [ObservableProperty] private ulong? _maxMemoryBlocksPerNumaNode;
+        [ObservableProperty] private string? _sgxLaunchControlDefault;
+
 
         public List<PageSizeItem> AvailablePageSizes { get; } = new List<PageSizeItem>
         {
@@ -172,14 +192,31 @@ namespace ExHyperV.Models
         public void Restore(VmMemorySettings other)
         {
             if (other == null) return;
-            _startup = other.Startup;
-            _dynamicMemoryEnabled = other.DynamicMemoryEnabled;
-            _minimum = other.Minimum;
-            _maximum = other.Maximum;
-            _buffer = other.Buffer;
-            _priority = other.Priority;
-            _backingPageSize = other.BackingPageSize;
-            _memoryEncryptionPolicy = other.MemoryEncryptionPolicy;
+            Startup = other.Startup;
+            DynamicMemoryEnabled = other.DynamicMemoryEnabled;
+            Minimum = other.Minimum;
+            Maximum = other.Maximum;
+            Buffer = other.Buffer;
+            Priority = other.Priority;
+            BackingPageSize = other.BackingPageSize;
+            MemoryEncryptionPolicy = other.MemoryEncryptionPolicy;
+
+            // 实验性功能补齐
+            BackingType = other.BackingType;
+            DynMemOperationAlignment = other.DynMemOperationAlignment;
+            MemoryAccessTrackingPolicy = other.MemoryAccessTrackingPolicy;
+            MemoryAccessTrackingState = other.MemoryAccessTrackingState;
+            SgxEnabled = other.SgxEnabled;
+            SgxSize = other.SgxSize;
+            SgxLaunchControlMode = other.SgxLaunchControlMode;
+            EnableGpaPinning = other.EnableGpaPinning;
+            CxlEnabled = other.CxlEnabled;
+            EnableColdHint = other.EnableColdHint;
+            EnableHotHint = other.EnableHotHint;
+            EnableEpf = other.EnableEpf;
+            EnablePrivateCompressionStore = other.EnablePrivateCompressionStore;
+            MaxMemoryBlocksPerNumaNode = other.MaxMemoryBlocksPerNumaNode;
+            SgxLaunchControlDefault = other.SgxLaunchControlDefault;
         }
     }
 
@@ -199,6 +236,7 @@ namespace ExHyperV.Models
         [ObservableProperty] private bool? _enablePerfmonArchPmu;
         [ObservableProperty] private bool? _allowAcountMcount;
         [ObservableProperty] private bool? _enableSocketTopology;
+        [ObservableProperty] private string? _cpuBrandString;
 
         public VmProcessorSettings Clone() => (VmProcessorSettings)this.MemberwiseClone();
         public void Restore(VmProcessorSettings other)
@@ -218,6 +256,7 @@ namespace ExHyperV.Models
             _enablePerfmonArchPmu = other.EnablePerfmonArchPmu;
             _allowAcountMcount = other.AllowAcountMcount;
             _enableSocketTopology = other.EnableSocketTopology;
+            _cpuBrandString = other.CpuBrandString;
         }
     }
 
@@ -253,12 +292,23 @@ namespace ExHyperV.Models
         [ObservableProperty] private Guid _id;
         [ObservableProperty] private string _name;
         [ObservableProperty] private string _notes;
-        [ObservableProperty] private int _generation;
+
+        [ObservableProperty]
+        [NotifyPropertyChangedFor(nameof(ConfigSummary))]
+        [NotifyPropertyChangedFor(nameof(CanChangeBootOrder))] 
+        private int _generation;
+
         [ObservableProperty] private string _version;
         [ObservableProperty] private string _osType;          
         [ObservableProperty] private string _state;
         [ObservableProperty] private string _uptime = "00:00:00";
-        [ObservableProperty] private bool _isRunning;
+        [ObservableProperty]
+        [NotifyPropertyChangedFor(nameof(CanChangeBootOrder))]
+        private bool _isRunning;
+
+        public bool CanChangeBootOrder => !(Generation == 1 && IsRunning);
+
+
         [ObservableProperty] private BitmapSource? _thumbnail;
         // ---  IP 和 MAC 属性 ---
         [ObservableProperty]
@@ -345,6 +395,17 @@ namespace ExHyperV.Models
         [ObservableProperty]
         [NotifyPropertyChangedFor(nameof(ConfigSummary))]
         private double _totalDiskSizeGb;
+
+
+        //引导顺序的配置
+
+        /// <summary>
+        /// 虚拟机的引导顺序项目列表
+        /// </summary>
+        [ObservableProperty]
+        private ObservableCollection<ExHyperV.Models.BootOrderItem> _bootOrderItems = new();
+
+
 
         // ----------------------------------------------------------------------------------
         // 显卡 (GPU) 分区与资源配置 (修复 XLS0432)

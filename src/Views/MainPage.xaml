@@ -27,14 +27,14 @@
         <!-- 1. Banner 区 (移除加粗，恢复圆角) -->
         <Grid Grid.Row="0" Margin="0,0,0,10">
             <!-- 背景图片 -->
-            <ui:Image CornerRadius="15" Stretch="Uniform" Source="pack://application:,,,/Assets/banner.png"/>
+            <ui:Image CornerRadius="15" Stretch="Uniform" Source="pack://application:,,,/Assets/banner.jpg"/>
 
             <!-- 左侧标题文字 -->
             <StackPanel VerticalAlignment="Center" Margin="30,5,0,-25">
                 <TextBlock Text="ExHyperV" 
                    FontSize="42" 
                    Foreground="White"
-                   FontFamily="pack://application:,,,/Assets/fonts/#Audiowide" 
+                   FontFamily="pack://application:,,,/Assets/#Audiowide" 
                    />
                 <TextBlock Text="{x:Static properties:Resources.exhyperv}"
                    
@@ -164,8 +164,8 @@
                     </Grid.ColumnDefinitions>
                     <ui:FontIcon Grid.Column="0" FontFamily="{DynamicResource SegoeFluentIcons}" Glyph="&#xE88E;" FontSize="24" Margin="0,0,15,0" Foreground="{ui:ThemeResource TextFillColorPrimaryBrush}"/>
                     <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                        <TextBlock Text="{x:Static properties:Resources.MainWindow_1}" Foreground="{ui:ThemeResource TextFillColorPrimaryBrush}" FontSize="16"/>
-                        <TextBlock Text="{x:Static properties:Resources.MainPage_2}" FontSize="13" Foreground="{ui:ThemeResource TextFillColorPrimaryBrush}" Margin="0,4,0,0"/>
+                        <TextBlock Text="{x:Static properties:Resources.Label_UsbPassthrough}" Foreground="{ui:ThemeResource TextFillColorPrimaryBrush}" FontSize="16"/>
+                        <TextBlock Text="{x:Static properties:Resources.MainPage_UsbPassthroughDesc}" FontSize="13" Foreground="{ui:ThemeResource TextFillColorPrimaryBrush}" Margin="0,4,0,0"/>
                     </StackPanel>
                 </Grid>
             </ui:CardAction>

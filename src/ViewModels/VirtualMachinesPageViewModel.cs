@@ -1,4 +1,8 @@
 using System.Collections.ObjectModel;
+using System.ComponentModel;
+using System.Diagnostics;
+using System.IO;
+using System.Management;
 using System.Windows;
 using System.Windows.Data;
 using System.Windows.Media;
@@ -6,13 +10,12 @@ using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using ExHyperV.Api;
+using ExHyperV.Behaviors;
 using ExHyperV.Models;
 using ExHyperV.Services;
 using ExHyperV.Tools;
 using Wpf.Ui.Controls;
-using System.Diagnostics;
-using System.ComponentModel;
-using System.IO;
 
 namespace ExHyperV.ViewModels
 {
@@ -21,7 +24,7 @@ namespace ExHyperV.ViewModels
         Dashboard, CpuSettings, CpuAffinity, MemorySettings, StorageSettings, AddStorage,
         GpuSettings,
         AddGpuSelect,
-        AddGpuProgress, NetworkSettings
+        AddGpuProgress, NetworkSettings, BootSettings, SpacetimeSettings
     }
     public partial class VirtualMachinesPageViewModel : ObservableObject, IDisposable
     {
@@ -38,6 +41,8 @@ namespace ExHyperV.ViewModels
         private readonly VmNetworkService _vmNetworkService;
         private readonly VmCreateService _vmCreateService = new();
         private readonly VmEditService _vmEditService = new();
+        private readonly VmBootService _vmBootService = new();
+        private readonly VmSpacetimeService _spacetimeService = new();
 
         // ----------------------------------------------------------------------------------
         // 监控与后台任务字段
@@ -56,7 +61,9 @@ namespace ExHyperV.ViewModels
         private const int MaxHistoryLength = 60;
         private readonly Dictionary<string, LinkedList<double>> _historyCache = new();
         private VmProcessorSettings _originalSettingsCache;
+        private VmMemorySettings _originalMemorySettingsCache;
         private bool _isInternalUpdating = false;
+        private bool _isDiskPathManual = false; // 记录用户是否手动选择过磁盘路径
 
         // ----------------------------------------------------------------------------------
         // 视图模型属性 - 页面状态
@@ -171,8 +178,8 @@ namespace ExHyperV.ViewModels
             _cpuAffinityService = new CpuAffinityService();
             _vmMemoryService = new VmMemoryService();
             _storageService = new VmStorageService();
-            _vmGpuService = new VmGPUService();
             _vmNetworkService = new VmNetworkService();
+            _vmGpuService = new VmGPUService(_powerService, _queryService, _vmNetworkService, _storageService);
 
             InitPossibleCpuCounts();
 
@@ -226,12 +233,14 @@ namespace ExHyperV.ViewModels
                 case VmDetailViewType.AddStorage:
                     CurrentViewType = VmDetailViewType.StorageSettings;
                     break;
+                case VmDetailViewType.BootSettings:
                 case VmDetailViewType.GpuSettings:
                 case VmDetailViewType.CpuSettings:
                 case VmDetailViewType.CpuAffinity:
                 case VmDetailViewType.MemorySettings:
                 case VmDetailViewType.StorageSettings:
                 case VmDetailViewType.NetworkSettings:
+                case VmDetailViewType.SpacetimeSettings:
                     CurrentViewType = VmDetailViewType.Dashboard;
                     break;
                 default:
@@ -246,6 +255,7 @@ namespace ExHyperV.ViewModels
 
         // 控制右侧界面切换
         [ObservableProperty] private bool _isCreatingVm = false;
+        [ObservableProperty] private string _creatingStatusText = string.Empty;
 
         // 当名称变化时，自动更新磁盘路径
         partial void OnNewVmNameChanged(string value)
@@ -395,11 +405,11 @@ namespace ExHyperV.ViewModels
         // 1. 点击左侧 "+" 按钮：进入创建模式
         private void UpdateDiskPath()
         {
-            if (string.IsNullOrWhiteSpace(NewVmName)) return;
+            if (string.IsNullOrWhiteSpace(NewVmName) || _isDiskPathManual) return; // 如果手动选过，就不再自动更新
+
             string root = string.IsNullOrWhiteSpace(NewVmStoragePath) ? @"C:\ProgramData\Microsoft\Windows\Hyper-V" : NewVmStoragePath;
             try
             {
-                // 自动计算：根目录 \ 虚拟机名 \ 虚拟机名.vhdx
                 NewVmNewDiskPath = Path.Combine(root, NewVmName, $"{NewVmName}.vhdx");
             }
             catch { }
@@ -511,7 +521,7 @@ namespace ExHyperV.ViewModels
                 IsLoadingSettings = false;
             }
         }
-        // 2. 点击 Properties.Resources.VirtualMachinesPageViewModel_1 按钮：退出创建模式
+        // 2. 点击 Properties.Resources.VmPage_MsgCreatingVm 按钮：退出创建模式
         [RelayCommand]
         private void CancelCreate()
         {
@@ -528,7 +538,11 @@ namespace ExHyperV.ViewModels
         [RelayCommand]
         private void BrowseNewVmPath()
         {
-            var dialog = new Microsoft.Win32.OpenFolderDialog { Title = Properties.Resources.VmPage_SelectConfigDir };
+            var dialog = new Microsoft.Win32.OpenFolderDialog
+            {
+                Title = Properties.Resources.VmPage_SelectConfigDir,
+                InitialDirectory = string.IsNullOrWhiteSpace(NewVmStoragePath) ? string.Empty : NewVmStoragePath
+            };
             if (dialog.ShowDialog() == true)
             {
                 NewVmStoragePath = dialog.FolderName;
@@ -543,9 +557,14 @@ namespace ExHyperV.ViewModels
             {
                 Title = Properties.Resources.VmPage_SelectNewVhdPath,
                 Filter = Properties.Resources.VmPage_VhdFilter,
-                FileName = $"{NewVmName}.vhdx"
+                InitialDirectory = GetDir(NewVmNewDiskPath),
+                FileName = GetFileName(NewVmNewDiskPath, $"{NewVmName}.vhdx")
             };
-            if (dialog.ShowDialog() == true) NewVmNewDiskPath = dialog.FileName;
+            if (dialog.ShowDialog() == true)
+            {
+                NewVmNewDiskPath = dialog.FileName;
+                _isDiskPathManual = true; // 关键：标记用户已手动选择
+            }
         }
 
         [RelayCommand]
@@ -554,7 +573,8 @@ namespace ExHyperV.ViewModels
             var dialog = new Microsoft.Win32.OpenFileDialog
             {
                 Title = Properties.Resources.VmPage_SelectExistVhd,
-                Filter = Properties.Resources.VmPage_VhdFilterBoth
+                Filter = Properties.Resources.VmPage_VhdFilterBoth,
+                InitialDirectory = GetDir(NewVmExistingDiskPath)
             };
             if (dialog.ShowDialog() == true) NewVmExistingDiskPath = dialog.FileName;
         }
@@ -565,12 +585,12 @@ namespace ExHyperV.ViewModels
             var dialog = new Microsoft.Win32.OpenFileDialog
             {
                 Title = Properties.Resources.VmPage_SelectIso,
-                Filter = Properties.Resources.VmPage_IsoFilter
+                Filter = Properties.Resources.VmPage_IsoFilter,
+                InitialDirectory = GetDir(NewVmIsoPath)
             };
             if (dialog.ShowDialog() == true) NewVmIsoPath = dialog.FileName;
         }
 
-        // 3. 点击 Properties.Resources.VirtualMachinesPageViewModel_2 按钮：执行创建
         [RelayCommand]
         private async Task ConfirmCreate()
         {
@@ -584,17 +604,6 @@ namespace ExHyperV.ViewModels
             // --- 2. 存储路径验证 ---
             string rootPath = string.IsNullOrWhiteSpace(NewVmStoragePath) ? @"C:\Virtual Machines" : NewVmStoragePath;
             string targetVmDir = Path.Combine(rootPath, NewVmName);
-
-            // 检查：如果目标文件夹已存在且里面有文件，弹出警告（防止覆盖或混乱）
-            if (Directory.Exists(targetVmDir))
-            {
-                if (Directory.EnumerateFileSystemEntries(targetVmDir).Any())
-                {
-                    // 这里可以根据需求决定是阻断还是仅提示。通常建议阻断以防止文件冲突。
-                    ShowSnackbar(Properties.Resources.VmPage_CreateWarn, Properties.Resources.VmPage_TargetExist, ControlAppearance.Caution, SymbolRegular.Warning24);
-                    return;
-                }
-            }
 
             // --- 3. 磁盘模式深度验证 ---
             if (NewVmDiskMode == 0) // 新建磁盘
@@ -657,13 +666,16 @@ namespace ExHyperV.ViewModels
             };
 
             // --- 3. 执行创建流程 ---
-            IsLoading = true; // 显示全屏遮罩
+            IsLoadingSettings = true;
+            CreatingStatusText = Properties.Resources.VmPage_MemTrackEnable;
+
             try
             {
                 var result = await _vmCreateService.CreateVirtualMachineAsync(request);
 
                 if (result.Success)
                 {
+                    CreatingStatusText = Properties.Resources.VmPage_MemTrackByProcessorNode;
                     string actualCreatedName = result.Message;
                     ShowSnackbar(
                          Properties.Resources.VmPage_CreateSuccess,
@@ -691,7 +703,8 @@ namespace ExHyperV.ViewModels
             }
             finally
             {
-                IsLoading = false;
+                IsLoadingSettings = false;
+                CreatingStatusText = string.Empty;
             }
         }
         // --- 辅助私有方法 ---
@@ -716,6 +729,37 @@ namespace ExHyperV.ViewModels
         // ----------------------------------------------------------------------------------
 
         [RelayCommand]
+        private void OpenVmFolder(VmInstanceInfo vm)
+        {
+            if (vm == null) return;
+            try
+            {
+                string? path = null;
+                using var searcher = new ManagementObjectSearcher(
+                    @"\\.\root\virtualization\v2",
+                    $"SELECT ConfigurationDataRoot FROM Msvm_VirtualSystemSettingData WHERE ElementName = '{vm.Name.Replace("'", "\\'")}' AND VirtualSystemType = 'Microsoft:Hyper-V:System:Realized'");
+                foreach (ManagementObject obj in searcher.Get())
+                {
+                    path = obj["ConfigurationDataRoot"]?.ToString();
+                    break;
+                }
+
+                if (!string.IsNullOrEmpty(path) && Directory.Exists(path))
+                {
+                    System.Diagnostics.Process.Start("explorer.exe", path);
+                }
+                else
+                {
+                    ShowSnackbar(Properties.Resources.VmPage_SgxAccessDenied, Properties.Resources.VmPage_SgxReadOnly, ControlAppearance.Caution, SymbolRegular.Warning24);
+                }
+            }
+            catch (Exception ex)
+            {
+                ShowSnackbar(Properties.Resources.VmPage_SgxAccessDenied, ex.Message, ControlAppearance.Danger, SymbolRegular.ErrorCircle24);
+            }
+        }
+
+        [RelayCommand]
         private async Task DeleteVmAsync(VmInstanceInfo vm)
         {
             if (vm == null) return;
@@ -723,14 +767,12 @@ namespace ExHyperV.ViewModels
 
             try
             {
-                await Task.Run(() =>
-                {
-                    // 组合命令：
-                    // 1. Stop-VM -TurnOff: 强制关闭电源（不管当前什么状态，报错也继续执行下一步）
-                    // 2. Remove-VM -Force: 删除配置
-                    string script = $"Stop-VM -Name '{vm.Name}' -TurnOff -ErrorAction SilentlyContinue; Remove-VM -Name '{vm.Name}' -Force";
-                    Utils.Run(script);
-                });
+                await _powerService.ExecuteControlActionAsync(vm.Name, "TurnOff");
+                var vmPath = (await WmiApi.QueryFirstAsync(
+                    $"SELECT * FROM Msvm_ComputerSystem WHERE ElementName = '{WmiApi.Escape(vm.Name)}'",
+                    obj => obj.Path.Path, WmiScope.HyperV)).Data;
+                await WmiApi.InvokeAsync("SELECT * FROM Msvm_VirtualSystemManagementService",
+                    "DestroySystem", p => p["AffectedSystem"] = vmPath, WmiScope.HyperV);
 
                 VmList.Remove(vm);
                 if (SelectedVm == vm) SelectedVm = VmList.FirstOrDefault();
@@ -741,16 +783,152 @@ namespace ExHyperV.ViewModels
             }
             finally { IsLoading = false; }
         }
+
+        [RelayCommand]
+        private async Task PurgeVmAsync(VmInstanceInfo vm)
+        {
+            if (vm == null) return;
+
+            // 二次确认弹窗
+            var dialog = new Wpf.Ui.Controls.MessageBox
+            {
+                Title = Properties.Resources.VmPage_MsgOptimizeComplete,
+                Content = string.Format(Properties.Resources.VmPage_MsgDiskReclaimOk, vm.Name),
+                PrimaryButtonText = Properties.Resources.VmPage_ErrOptimizeFailed,
+                CloseButtonText = Properties.Resources.VmPage_ErrSystemException,
+            };
+
+            var result = await dialog.ShowDialogAsync();
+            if (result != Wpf.Ui.Controls.MessageBoxResult.Primary) return;
+
+            IsLoading = true;
+            try
+            {
+                await Task.Run(async () =>
+                {
+                    string vmGuid = vm.Id.ToString();
+
+                    // 1. 收集磁盘路径 — Msvm_StorageAllocationSettingData.Path
+                    var diskResp = await WmiApi.QueryAsync(
+                        $"SELECT Path FROM Msvm_StorageAllocationSettingData WHERE InstanceID LIKE 'Microsoft:{vmGuid}%' AND ResourceSubType = 'Microsoft:Hyper-V:Virtual Hard Disk'",
+                        obj => obj["Path"]?.ToString() ?? string.Empty,
+                        WmiScope.HyperV);
+                    var diskPaths = (diskResp.Data ?? new List<string>())
+                        .Where(p => !string.IsNullOrEmpty(p))
+                        .ToList();
+
+                    // 2. 收集配置目录 — Msvm_VirtualSystemSettingData.ConfigurationDataRoot
+                    var configResp = await WmiApi.QueryFirstAsync(
+                        $"SELECT ConfigurationDataRoot FROM Msvm_VirtualSystemSettingData WHERE VirtualSystemIdentifier = '{vmGuid}' AND VirtualSystemType = 'Microsoft:Hyper-V:System:Realized'",
+                        obj => obj["ConfigurationDataRoot"]?.ToString() ?? string.Empty,
+                        WmiScope.HyperV);
+                    string? rawConfigDir = configResp.HasData ? configResp.Data : null;
+
+                    // 3. 停止
+                    await _powerService.ExecuteControlActionAsync(vm.Name, "TurnOff");
+
+                    // 4. 删除
+                    var vmPath = (await WmiApi.QueryFirstAsync(
+                        $"SELECT * FROM Msvm_ComputerSystem WHERE ElementName = '{WmiApi.Escape(vm.Name)}'",
+                        obj => obj.Path.Path, WmiScope.HyperV)).Data;
+                    await WmiApi.InvokeAsync("SELECT * FROM Msvm_VirtualSystemManagementService",
+                        "DestroySystem", p => p["AffectedSystem"] = vmPath, WmiScope.HyperV);
+
+                    // 5. 删除所有 vhdx 文件
+                    foreach (var diskPath in diskPaths)
+                    {
+                        if (string.IsNullOrEmpty(diskPath)) continue;
+                        try
+                        {
+                            if (File.Exists(diskPath))
+                                File.Delete(diskPath);
+                        }
+                        catch { }
+                    }
+
+                    // 6. 尝试删除虚拟机配置文件夹
+                    if (!string.IsNullOrEmpty(rawConfigDir))
+                    {
+                        var protectedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+    {
+        @"C:\ProgramData\Microsoft\Windows\Hyper-V",
+        @"C:\Users\Public\Documents\Hyper-V",
+        @"C:\ProgramData\Microsoft\Windows",
+        @"C:\ProgramData",
+        @"C:\Users\Public\Documents"
+    };
+
+                        // 如果 ConfigurationLocation 本身就是根目录，尝试找子目录
+                        string configDir = rawConfigDir.TrimEnd('\\', '/');
+                        if (protectedPaths.Contains(configDir))
+                        {
+                            // 尝试找以虚拟机名命名的子目录
+                            string subDir = Path.Combine(configDir, vm.Name);
+                            if (Directory.Exists(subDir))
+                                configDir = subDir;
+                            else
+                                configDir = string.Empty; // 找不到子目录，放弃删除
+                        }
+
+                        if (!string.IsNullOrEmpty(configDir) && Directory.Exists(configDir))
+                        {
+                            bool isRoot = Path.GetPathRoot(configDir).Equals(configDir, StringComparison.OrdinalIgnoreCase);
+                            if (!protectedPaths.Contains(configDir) && !isRoot)
+                            {
+                                try { Directory.Delete(configDir, recursive: true); }
+                                catch { }
+                            }
+                        }
+                    }
+                });
+
+                VmList.Remove(vm);
+                if (SelectedVm == vm) SelectedVm = VmList.FirstOrDefault();
+                ShowSnackbar(Properties.Resources.VmPage_LogStorageAddAction, string.Format(Properties.Resources.VmPage_LogStorageAutoAssign, vm.Name), ControlAppearance.Success, SymbolRegular.Delete24);
+            }
+            catch (Exception ex)
+            {
+                ShowSnackbar(Properties.Resources.VmPage_LogUiSaveTriggered, Utils.GetFriendlyErrorMessages(ex.Message), ControlAppearance.Danger, SymbolRegular.ErrorCircle24);
+            }
+            finally { IsLoading = false; }
+        }
         // 当选中的虚拟机发生变化时重置视图
         partial void OnSelectedVmChanged(VmInstanceInfo value)
         {
             if (value != null)
             {
                 IsCreatingVm = false;
+                _ = RefreshBootOrderForSelectedVmAsync(value);
             }
             CurrentViewType = VmDetailViewType.Dashboard;
             _originalSettingsCache = null;
+            _originalMemorySettingsCache = null;
             HostDisks.Clear();
+        }
+
+        private async Task RefreshBootOrderForSelectedVmAsync(VmInstanceInfo vm)
+        {
+            if (vm == null) return;
+            try
+            {
+                var list = await _vmBootService.GetBootOrderAsync(vm.Name);
+
+                Application.Current.Dispatcher.Invoke(() => {
+                    vm.BootOrderItems.Clear();
+                    foreach (var item in list)
+                    {
+                        vm.BootOrderItems.Add(item);
+                    }
+                    if (vm.BootOrderItems.Count > 0)
+                    {
+                        vm.BootOrderItems.Last().IsLast = true;
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[BOOT-REFRESH-ERROR] {ex.Message}");
+            }
         }
 
         private VmInstanceInfo CreateVmInstance(ExHyperV.Models.VmInstanceInfo vm)
@@ -931,13 +1109,13 @@ namespace ExHyperV.ViewModels
                 consoleWin.Show();
 
                 // 4. (可选) 给个小反馈
-                Debug.WriteLine(string.Format(Properties.Resources.VirtualMachinesPageViewModel_3, SelectedVm.Name));
+                Debug.WriteLine(string.Format(Properties.Resources.VmPage_ErrOpenFailed, SelectedVm.Name));
             }
             catch (Exception ex)
             {
                 ShowSnackbar(
                     Properties.Resources.Error_Vm_StartFail,
-                    string.Format(Properties.Resources.VirtualMachinesPageViewModel_4, ex.Message),
+                    string.Format(Properties.Resources.VmPage_ErrConfigDirNotFound, ex.Message),
                     ControlAppearance.Danger,
                     SymbolRegular.ErrorCircle24);
             }
@@ -1441,15 +1619,15 @@ namespace ExHyperV.ViewModels
                         bool success = ProcessAffinityManager.SetVmProcessAffinity(vm.Id, coreIds);
                         if (success)
                         {
-                            Debug.WriteLine(string.Format(Properties.Resources.VirtualMachinesPageViewModel_5, vm.Name));
+                            Debug.WriteLine(string.Format(Properties.Resources.VmPage_ErrOpenFailed2, vm.Name));
                             break;
                         }
-                        Debug.WriteLine(string.Format(Properties.Resources.VirtualMachinesPageViewModel_6, i + 1, vm.Name));
+                        Debug.WriteLine(string.Format(Properties.Resources.VmPage_TitlePermanentDelete, i + 1, vm.Name));
                     }
                 }
                 catch (Exception ex)
                 {
-                    Debug.WriteLine(string.Format(Properties.Resources.VirtualMachinesPageViewModel_7, ex.Message));
+                    Debug.WriteLine(string.Format(Properties.Resources.VmPage_MsgPermanentDeleteConfirm, ex.Message));
                 }
             });
         }
@@ -1465,6 +1643,8 @@ namespace ExHyperV.ViewModels
             if (SelectedVm == null) return;
             CurrentViewType = VmDetailViewType.MemorySettings;
             IsLoadingSettings = true;
+
+            _isInternalUpdating = true; // 开启拦截：加载过程中不触发任何 PropertyChanged 逻辑
             try
             {
                 var settings = await _vmMemoryService.GetVmMemorySettingsAsync(SelectedVm.Name);
@@ -1472,50 +1652,77 @@ namespace ExHyperV.ViewModels
                 {
                     if (SelectedVm.MemorySettings != null)
                         SelectedVm.MemorySettings.PropertyChanged -= MemorySettings_PropertyChanged;
+
                     SelectedVm.MemorySettings = settings;
+                    _originalMemorySettingsCache = settings.Clone(); // 加载成功时缓存原始状态
                     SelectedVm.MemorySettings.PropertyChanged += MemorySettings_PropertyChanged;
                 }
             }
-            catch (Exception ex) { ShowSnackbar(Properties.Resources.Common_Error, string.Format(Properties.Resources.Error_Format_LoadFail, Utils.GetFriendlyErrorMessages(ex.Message)), ControlAppearance.Danger, SymbolRegular.ErrorCircle24); }
+            catch (Exception ex)
+            {
+                ShowSnackbar(Properties.Resources.Common_Error, ex.Message, ControlAppearance.Danger, SymbolRegular.ErrorCircle24);
+            }
             finally
             {
-                await Task.Delay(200);
+                await Task.Delay(100);
+                _isInternalUpdating = false; // 加载完毕，恢复监听
                 IsLoadingSettings = false;
             }
         }
-
-        // 监听内存属性变更以实现部分自动应用
         private async void MemorySettings_PropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
         {
-            var fastTrackProps = new[] { nameof(VmMemorySettings.BackingPageSize), nameof(VmMemorySettings.DynamicMemoryEnabled), nameof(VmMemorySettings.MemoryEncryptionPolicy) };
+            if (_isInternalUpdating || IsLoadingSettings || SelectedVm?.MemorySettings == null)
+                return;
+
+            var fastTrackProps = new[] {
+                nameof(VmMemorySettings.BackingPageSize),
+                nameof(VmMemorySettings.DynamicMemoryEnabled),
+                nameof(VmMemorySettings.MemoryEncryptionPolicy),
+                nameof(VmMemorySettings.BackingType),
+                nameof(VmMemorySettings.MemoryAccessTrackingState),
+                nameof(VmMemorySettings.MemoryAccessTrackingPolicy),
+                nameof(VmMemorySettings.EnableColdHint),
+                nameof(VmMemorySettings.EnableHotHint),
+                nameof(VmMemorySettings.EnableEpf),
+                nameof(VmMemorySettings.EnablePrivateCompressionStore),
+                nameof(VmMemorySettings.SgxEnabled),
+                nameof(VmMemorySettings.CxlEnabled),
+                nameof(VmMemorySettings.EnableGpaPinning),
+                nameof(VmMemorySettings.DynMemOperationAlignment),
+                nameof(VmMemorySettings.MaxMemoryBlocksPerNumaNode)
+            };
+
             if (fastTrackProps.Contains(e.PropertyName))
             {
-                if (IsLoadingSettings || SelectedVm == null || SelectedVm.IsRunning || SelectedVm.MemorySettings == null)
-                    return;
+                if (SelectedVm.IsRunning) return;
 
+                // 移除以前错误的 var backup = SelectedVm.MemorySettings.Clone();
+
+                _isInternalUpdating = true;
                 IsLoadingSettings = true;
                 try
                 {
-                    var result = await _vmMemoryService.SetVmMemorySettingsAsync(
-    SelectedVm.Name,
-    SelectedVm.MemorySettings,
-    SelectedVm.IsRunning // 传入当前运行状态
-);
+                    var result = await _vmMemoryService.SetVmMemorySettingsAsync(SelectedVm.Name, SelectedVm.MemorySettings, false);
                     if (!result.Success)
                     {
-                        ShowSnackbar(Properties.Resources.Error_Memory_AutoApply, result.Message, ControlAppearance.Danger, SymbolRegular.ErrorCircle24);
-                        await GoToMemorySettings();
+                        ShowSnackbar(Properties.Resources.VmPage_LogDiskSaveResult, result.Message, ControlAppearance.Danger, SymbolRegular.ErrorCircle24);
+
+                        // 核心修复：使用真正纯净的初始缓存进行弹回恢复
+                        SelectedVm.MemorySettings.Restore(_originalMemorySettingsCache);
                     }
-                    else OnPropertyChanged(nameof(SelectedVm));
+                    else
+                    {
+                        // 如果修改成功，需要更新基准缓存为当前状态，否则下次别的选项失败时，会把这次成功的修改也弹回去
+                        _originalMemorySettingsCache = SelectedVm.MemorySettings.Clone();
+                    }
                 }
                 finally
                 {
-                    await Task.Delay(200);
                     IsLoadingSettings = false;
+                    _isInternalUpdating = false;
                 }
             }
         }
-
         // 手动应用内存设置
         [RelayCommand]
         private async Task ApplyMemorySettings()
@@ -1528,12 +1735,64 @@ namespace ExHyperV.ViewModels
                     SelectedVm.Name,
                     SelectedVm.MemorySettings,
                     SelectedVm.IsRunning // 传入当前运行状态
-                ); if (!result.Success) ShowSnackbar(Properties.Resources.Error_Common_SaveFail, Utils.GetFriendlyErrorMessages(result.Message), ControlAppearance.Danger, SymbolRegular.ErrorCircle24);
+                );
+
+                if (!result.Success)
+                {
+                    ShowSnackbar(Properties.Resources.Error_Common_SaveFail, Utils.GetFriendlyErrorMessages(result.Message), ControlAppearance.Danger, SymbolRegular.ErrorCircle24);
+                }
+                else
+                {
+                    // 保存成功后更新缓存基准
+                    _originalMemorySettingsCache = SelectedVm.MemorySettings.Clone();
+                }
+
                 await GoToMemorySettings();
             }
-            catch (Exception ex) { ShowSnackbar(Properties.Resources.Common_ExceptionLabel, Utils.GetFriendlyErrorMessages(ex.Message), ControlAppearance.Danger, SymbolRegular.ErrorCircle24); }
+            catch (Exception ex)
+            {
+                ShowSnackbar(Properties.Resources.Common_ExceptionLabel, Utils.GetFriendlyErrorMessages(ex.Message), ControlAppearance.Danger, SymbolRegular.ErrorCircle24);
+            }
             finally { IsLoadingSettings = false; }
         }
+        // --- 实验性功能的纯中文数据源 (禁止任何英文) ---
+
+        public List<object> BackingTypeOptions { get; } = new()
+{
+    new { Value = (byte)0, Name = Properties.Resources.VmPage_LogSaveError },
+    new { Value = (byte)1, Name = Properties.Resources.VmPage_ErrOperationFailed },
+    new { Value = (byte)2, Name = Properties.Resources.VmPage_ErrModifyFailed2 }
+};
+
+        public List<object> MemoryByteGranularityOptions { get; } = new()
+{
+    new { Value = (byte)0, Name = Properties.Resources.VmPage_ErrRetrieveFailed },
+    new { Value = (byte)1, Name = Properties.Resources.VmPage_MsgOperationOk },
+    new { Value = (byte)2, Name = Properties.Resources.VmPage_MsgSpacetimeCreated },
+    new { Value = (byte)3, Name = Properties.Resources.VmPage_ErrOperationFailed2 }
+};
+        public List<object> MemoryUintGranularityOptions { get; } = new()
+{
+    new { Value = (uint)0, Name = Properties.Resources.VmPage_ErrRetrieveFailed },
+    new { Value = (uint)1, Name = Properties.Resources.VmPage_MsgOperationOk },
+    new { Value = (uint)2, Name = Properties.Resources.VmPage_MsgSpacetimeCreated },
+    new { Value = (uint)3, Name = Properties.Resources.VmPage_ErrOperationFailed2 }
+};
+
+
+        public List<object> MemoryTrackingStateOptions { get; } = new()
+{
+    new { Value = (byte)0, Name = Properties.Resources.VmPage_MsgSpacetimeAnnihilated },
+    new { Value = (byte)1, Name = Properties.Resources.VmPage_MsgWormholeOpened },
+    new { Value = (byte)2, Name = Properties.Resources.VmPage_MsgConnectedTo }
+};
+
+        public List<object> SgxLaunchControlOptions { get; } = new()
+{
+    new { Value = (uint)0, Name = Properties.Resources.VmPage_ErrOpenFailed3 },
+    new { Value = (uint)1, Name = Properties.Resources.VmPage_MsgWormholeClosed },
+    new { Value = (uint)2, Name = Properties.Resources.VmPage_MsgTimelineRestored }
+};
 
         // ----------------------------------------------------------------------------------
         // 存储管理模块 - 列表与基础操作
@@ -1564,10 +1823,58 @@ namespace ExHyperV.ViewModels
         {
             try
             {
-                var disks = await _storageService.GetHostDisksAsync();
-                Application.Current.Dispatcher.Invoke(() => HostDisks = new ObservableCollection<HostDiskInfo>(disks));
+                // 1. 获取 ApiResponse<List<HostDiskInfo>>
+                var response = await _storageService.GetHostDisksAsync();
+
+                // 2. 判断是否成功且存在数据
+                if (response.HasData)
+                {
+                    // 3. 将 response.Data 传递给 ObservableCollection
+                    Application.Current.Dispatcher.Invoke(() => HostDisks = new ObservableCollection<HostDiskInfo>(response.Data!));
+                }
             }
             catch { }
+        }
+
+
+        // 优化磁盘
+        [RelayCommand]
+        private async Task OptimizeStorage(VmStorageItem item)
+        {
+            // 空值、正在运行、或已经在优化中的磁盘不处理
+            if (item == null || SelectedVm == null || SelectedVm.IsRunning || item.IsOptimizing) return;
+
+            // 进入优化状态
+            item.IsOptimizing = true;
+
+            try
+            {
+                // 1. 发起 WMI 压缩指令
+                // 虽然 await 会等待，但由于 vmms.exe 承载了 Job，即便 UI 崩溃，任务依然在后台跑
+                var result = await _storageService.CompactDiskAsync(item.PathOrDiskNumber);
+
+                if (result.Success)
+                {
+                    // 2. 刷新磁盘物理大小 (FileSize)
+                    // 调用现有的存储服务，确保 UI 上的 GB 数值得到更新
+                    await _storageService.RefreshVirtualDiskSizesAsync(SelectedVm);
+
+                    ShowSnackbar(Properties.Resources.VmPage_ErrCloseFailed, Properties.Resources.VmPage_MsgFeatureInDev, ControlAppearance.Success, SymbolRegular.CheckmarkCircle24);
+                }
+                else
+                {
+                    ShowSnackbar(Properties.Resources.VmPage_MsgParallelUniverse, result.Error, ControlAppearance.Danger, SymbolRegular.ErrorCircle24);
+                }
+            }
+            catch (Exception ex)
+            {
+                ShowSnackbar(Properties.Resources.VmPage_MsgOperationOk4, ex.Message, ControlAppearance.Danger, SymbolRegular.ErrorCircle24);
+            }
+            finally
+            {
+                // 3. 释放优化状态
+                item.IsOptimizing = false;
+            }
         }
 
         // 移除存储设备
@@ -1761,7 +2068,7 @@ namespace ExHyperV.ViewModels
         {
             if (_isInternalUpdating || value == null) return;
 
-            Debug.WriteLine(string.Format(Properties.Resources.VirtualMachinesPageViewModel_8, value));
+            Debug.WriteLine(string.Format(Properties.Resources.VmPage_BtnPermanentDelete, value));
             RefreshAvailableNumbers(value);
 
             // 手动切换时也使用跳变技巧，确保 UI 同步
@@ -1777,14 +2084,14 @@ namespace ExHyperV.ViewModels
             // 如果是内部设定的跳变值 -2，或者是锁定状态，绝对不要去刷新位置列表，否则会造成闪烁或死循环
             if (value == -2 || _isInternalUpdating) return;
 
-            Debug.WriteLine(string.Format(Properties.Resources.VirtualMachinesPageViewModel_9, value));
+            Debug.WriteLine(string.Format(Properties.Resources.VmPage_BtnCancel, value));
             UpdateAvailableLocations();
         }
 
         // 增加位置变更监听（用于观察是否有 UI 回传 null/默认值的情况）
         partial void OnSelectedLocationChanged(int value)
         {
-            Debug.WriteLine(string.Format(Properties.Resources.VirtualMachinesPageViewModel_10, value));
+            Debug.WriteLine(string.Format(Properties.Resources.VmPage_MsgDeleteComplete, value));
         }
 
 
@@ -1906,28 +2213,20 @@ namespace ExHyperV.ViewModels
                     Title = Properties.Resources.Title_CreateVhd,
                     Filter = Properties.Resources.Filter_VhdExt,
                     DefaultExt = ".vhdx",
-                    FileName = Properties.Resources.Default_VhdName
+                    InitialDirectory = GetDir(FilePath),
+                    FileName = GetFileName(FilePath, Properties.Resources.Default_VhdName)
                 };
-
-                if (saveDialog.ShowDialog() == true)
-                {
-                    FilePath = saveDialog.FileName;
-                }
+                if (saveDialog.ShowDialog() == true) FilePath = saveDialog.FileName;
             }
             else
             {
                 var openDialog = new Microsoft.Win32.OpenFileDialog
                 {
                     Title = DeviceType == "HardDisk" ? Properties.Resources.Title_OpenVhd : Properties.Resources.Title_SelectIso,
-                    Filter = DeviceType == "HardDisk" ?
-                             Properties.Resources.Filter_VhdOnly :
-                             Properties.Resources.Filter_IsoOnly
+                    Filter = DeviceType == "HardDisk" ? Properties.Resources.Filter_VhdOnly : Properties.Resources.Filter_IsoOnly,
+                    InitialDirectory = GetDir(FilePath)
                 };
-
-                if (openDialog.ShowDialog() == true)
-                {
-                    FilePath = openDialog.FileName;
-                }
+                if (openDialog.ShowDialog() == true) FilePath = openDialog.FileName;
             }
         }
 
@@ -1935,7 +2234,10 @@ namespace ExHyperV.ViewModels
         [RelayCommand]
         private void BrowseFolder()
         {
-            var dialog = new Microsoft.Win32.OpenFolderDialog();
+            var dialog = new Microsoft.Win32.OpenFolderDialog
+            {
+                InitialDirectory = string.IsNullOrWhiteSpace(IsoSourceFolderPath) ? string.Empty : IsoSourceFolderPath
+            };
             if (dialog.ShowDialog() == true) IsoSourceFolderPath = dialog.FolderName;
         }
 
@@ -1943,7 +2245,11 @@ namespace ExHyperV.ViewModels
         [RelayCommand]
         private void BrowseParentFile()
         {
-            var dialog = new Microsoft.Win32.OpenFileDialog { Filter = Properties.Resources.Filter_VhdOnly };
+            var dialog = new Microsoft.Win32.OpenFileDialog
+            {
+                Filter = Properties.Resources.Filter_VhdOnly,
+                InitialDirectory = string.IsNullOrWhiteSpace(ParentPath) ? string.Empty : System.IO.Path.GetDirectoryName(ParentPath)
+            };
             if (dialog.ShowDialog() == true) ParentPath = dialog.FileName;
         }
 
@@ -1956,7 +2262,8 @@ namespace ExHyperV.ViewModels
                 Title = Properties.Resources.Title_SaveIso,
                 Filter = Properties.Resources.Filter_IsoExt,
                 DefaultExt = ".iso",
-                FileName = $"{IsoVolumeLabel}.iso"
+                InitialDirectory = string.IsNullOrWhiteSpace(IsoOutputPath) ? string.Empty : System.IO.Path.GetDirectoryName(IsoOutputPath),
+                FileName = string.IsNullOrWhiteSpace(IsoOutputPath) ? $"{IsoVolumeLabel}.iso" : System.IO.Path.GetFileName(IsoOutputPath)
             };
 
             if (saveDialog.ShowDialog() == true)
@@ -2118,7 +2425,7 @@ namespace ExHyperV.ViewModels
                     // 用 -2 强制触发 PropertyChanged，因为 -1 可能已经是当前 UI 的内部错误状态
                     SelectedControllerNumber = -2;
                     SelectedControllerNumber = targetNum;
-                    Debug.WriteLine(string.Format(Properties.Resources.VirtualMachinesPageViewModel_13, SelectedControllerNumber));
+                    Debug.WriteLine(string.Format(Properties.Resources.VmPage_ErrModifyFailed, SelectedControllerNumber));
 
                     // --- 强刷 [位置] ---
                     SelectedLocation = -2;
@@ -2130,27 +2437,27 @@ namespace ExHyperV.ViewModels
                     {
                         SelectedLocation = AvailableLocations[0];
                     }
-                    Debug.WriteLine(string.Format(Properties.Resources.VirtualMachinesPageViewModel_14, SelectedLocation));
+                    Debug.WriteLine(string.Format(Properties.Resources.VmPage_MemMapPhysical, SelectedLocation));
 
                     IsSlotValid = true;
                     SlotWarningMessage = string.Empty;
 
                     // 全部完成后解锁
                     _isInternalUpdating = false;
-                    Debug.WriteLine(Properties.Resources.VirtualMachinesPageViewModel_15);
+                    Debug.WriteLine(Properties.Resources.VmPage_MemMapVirtual);
 
                 }), System.Windows.Threading.DispatcherPriority.Loaded);
             }
             catch (Exception ex)
             {
                 _isInternalUpdating = false;
-                Debug.WriteLine(string.Format(Properties.Resources.VirtualMachinesPageViewModel_16, ex.Message));
+                Debug.WriteLine(string.Format(Properties.Resources.VmPage_MemMapHybrid, ex.Message));
             }
         }
 
         private void RefreshAvailableNumbers(string type)
         {
-            Debug.WriteLine(string.Format(Properties.Resources.VirtualMachinesPageViewModel_17, type));
+            Debug.WriteLine(string.Format(Properties.Resources.VmPage_MemGranAutoAssign, type));
             AvailableControllerNumbers.Clear();
             int maxCtrl = (type == "IDE") ? 2 : 4;
             for (int i = 0; i < maxCtrl; i++)
@@ -2161,7 +2468,7 @@ namespace ExHyperV.ViewModels
         {
             if (SelectedVm == null || type == null) return;
 
-            Debug.WriteLine(string.Format(Properties.Resources.VirtualMachinesPageViewModel_18, type, ctrlNum));
+            Debug.WriteLine(string.Format(Properties.Resources.VmPage_MemGranStandard, type, ctrlNum));
             var usedLocations = SelectedVm.StorageItems
                 .Where(i => i.ControllerType == type && i.ControllerNumber == ctrlNum)
                 .Select(i => i.ControllerLocation)
@@ -2197,7 +2504,7 @@ namespace ExHyperV.ViewModels
             if (!AvailableLocations.Contains(SelectedLocation))
             {
                 SelectedLocation = AvailableLocations[0];
-                Debug.WriteLine(string.Format(Properties.Resources.VirtualMachinesPageViewModel_19, SelectedLocation));
+                Debug.WriteLine(string.Format(Properties.Resources.VmPage_MemGranLargePage, SelectedLocation));
             }
         }
         // 刷新控制器选项
@@ -2561,6 +2868,90 @@ namespace ExHyperV.ViewModels
             }
         }
 
+        // 引导顺序部分
+        private readonly System.Threading.SemaphoreSlim _bootOrderLock = new(1, 1);
+        private CancellationTokenSource? _bootSaveCts;
+
+        [RelayCommand]
+        private async Task GoToBootSettings()
+        {
+            if (SelectedVm == null) return;
+            CurrentViewType = VmDetailViewType.BootSettings;
+            IsLoadingSettings = true;
+
+            try
+            {
+                var list = await _vmBootService.GetBootOrderAsync(SelectedVm.Name);
+
+                // 更新 UI 集合
+                SelectedVm.BootOrderItems.Clear();
+                foreach (var item in list) SelectedVm.BootOrderItems.Add(item);
+
+                // 标记最后一个用于 UI 箭头显示
+                if (SelectedVm.BootOrderItems.Count > 0)
+                    SelectedVm.BootOrderItems.Last().IsLast = true;
+            }
+            finally { IsLoadingSettings = false; }
+        }
+
+        // 保存逻辑
+        [RelayCommand]
+        private async Task SaveBootOrder()
+        {
+            await SilentSaveBootOrderAsync();
+        }
+
+        public async Task SilentSaveBootOrderAsync()
+        {
+            if (SelectedVm == null || SelectedVm.BootOrderItems == null) return;
+
+            try
+            {
+                // 关键检查：在保存前打印 UI 集合的名称顺序
+                var currentOrder = SelectedVm.BootOrderItems.ToList();
+                string names = string.Join(" -> ", currentOrder.Select(x => x.Name));
+                Debug.WriteLine(string.Format(Properties.Resources.VmPage_MsgRollbackComplete, names));
+
+                string vmName = SelectedVm.Name;
+                bool success = await _vmBootService.SetBootOrderAsync(vmName, currentOrder);
+
+                Debug.WriteLine(string.Format(Properties.Resources.VmPage_ErrRollbackFailed, success));
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine(string.Format(Properties.Resources.VmPage_BtnReset, ex.Message));
+            }
+        }
+
+        [RelayCommand]
+        private void ReorderBootItem(DragMoveArgs args)
+        {
+            if (SelectedVm == null || args == null) return;
+
+            var list = SelectedVm.BootOrderItems;
+            int oldIndex = list.IndexOf(args.Source);
+            int newIndex = list.IndexOf(args.Target);
+
+            if (oldIndex == -1 || newIndex == -1) return;
+
+            // 之前的 1/3 阈值逻辑迁移到这里进行最终判定
+            if (newIndex > oldIndex) // 向下拖
+            {
+                if (args.RelativeY < args.Threshold) return;
+            }
+            else // 向上拖
+            {
+                if (args.RelativeY > (args.Threshold * 2)) return; // 对应 targetItem.ActualHeight - threshold
+            }
+
+            // 执行移动
+            list.Move(oldIndex, newIndex);
+
+            // 更新 IsLast 标记以维护 UI 箭头显示（如果需要）
+            foreach (var item in list) item.IsLast = false;
+            list.Last().IsLast = true;
+        }
+
         // ----------------------------------------------------------------------------------
         // GPU 管理模块 - 列表与基础操作
         // ----------------------------------------------------------------------------------
@@ -2690,7 +3081,7 @@ namespace ExHyperV.ViewModels
                 }
                 else
                 {
-                    ShowSnackbar(Properties.Resources.Error_Common_OpFail, Properties.Resources.Error_Gpu_RemoveFail, ControlAppearance.Danger, SymbolRegular.ErrorCircle24);
+                    ShowSnackbar(Properties.Resources.Error_Storage_RemoveFail, Properties.Resources.Error_Gpu_RemoveFail, ControlAppearance.Danger, SymbolRegular.ErrorCircle24);
                 }
             }
             catch (Exception ex)
@@ -2876,21 +3267,15 @@ namespace ExHyperV.ViewModels
                         case GpuTaskType.PowerCheck:
                             if (_needConfig || AutoInstallDrivers)
                             {
-                                var (isOff, state) = await _vmGpuService.IsVmPoweredOffAsync(SelectedVm.Name);
+                                var (isOff, state) = await _queryService.IsVmPoweredOffAsync(SelectedVm.Name);
                                 if (!isOff)
                                 {
                                     task.Description = string.Format(Properties.Resources.Msg_Gpu_ForceOff, state);
                                     AppendLog(task.Description);
                                     await _powerService.ExecuteControlActionAsync(SelectedVm.Name, "TurnOff");
-                                    var powerOffDeadline = DateTime.UtcNow.AddMinutes(2);
-                                    while (!(await _vmGpuService.IsVmPoweredOffAsync(SelectedVm.Name)).IsOff)
+                                    while (!(await _queryService.IsVmPoweredOffAsync(SelectedVm.Name)).IsOff)
                                     {
-                                        if (DateTime.UtcNow > powerOffDeadline)
-                                        {
-                                            AppendLog("Timeout waiting for VM to power off.");
-                                            return;
-                                        }
-                                        await Task.Delay(500);
+                                        await Task.Delay(100);
                                     }
                                 }
                                 task.Description = Properties.Resources.Msg_Gpu_Off;
@@ -2924,13 +3309,7 @@ namespace ExHyperV.ViewModels
                             await Task.Delay(100);
                             var currentAdapters = await _vmGpuService.GetVmGpuAdaptersAsync(SelectedVm.Name);
                             // 记录下来，以便后续步骤（如驱动安装）失败时删除
-                            var lastAdapter = currentAdapters.LastOrDefault();
-                            if (lastAdapter == default)
-                            {
-                                AppendLog("Failed to verify GPU partition adapter assignment.");
-                                return;
-                            }
-                            _currentProcessingGpuAdapterId = lastAdapter.Id;
+                            _currentProcessingGpuAdapterId = currentAdapters.LastOrDefault().Id;
                             break;
 
                         case GpuTaskType.Driver:
@@ -2974,7 +3353,7 @@ namespace ExHyperV.ViewModels
                                         AppendLog("Detected single Linux partition. Automating environment preparation...");
 
                                         // 异步启动 Linux 准备工作流（即你点击列表项时触发的逻辑）
-                                        _ = Task.Run(async () => await SelectPartitionAndContinueCommand.ExecuteAsync(singlePart));
+                                        await SelectPartitionAndContinue(singlePart);
 
                                         return; // 退出当前循环，由 SelectPartitionAndContinue 接管后续逻辑
                                     }
@@ -3009,17 +3388,10 @@ namespace ExHyperV.ViewModels
                     AppendLog(string.Format(Properties.Resources.Error_Format_StageExc, task.Name, ex.Message));
                     if (!string.IsNullOrEmpty(_currentProcessingGpuAdapterId))
                     {
-                        try
-                        {
-                            AppendLog(Properties.Resources.Error_Gpu_LinuxRollback);
-                            await _vmGpuService.RemoveGpuPartitionAsync(SelectedVm.Name, _currentProcessingGpuAdapterId);
-                            _currentProcessingGpuAdapterId = null;
-                            AppendLog(Properties.Resources.Msg_Gpu_PartitionRemoved);
-                        }
-                        catch (Exception rollbackEx)
-                        {
-                            AppendLog($"[WARNING] Rollback failed: {rollbackEx.Message}");
-                        }
+                        AppendLog(Properties.Resources.Error_Gpu_LinuxRollback);
+                        await _vmGpuService.RemoveGpuPartitionAsync(SelectedVm.Name, _currentProcessingGpuAdapterId);
+                        _currentProcessingGpuAdapterId = null;
+                        AppendLog(Properties.Resources.Msg_Gpu_PartitionRemoved);
                     }
 
                     ShowSnackbar(Properties.Resources.Error_Common_OpFail, string.Format(Properties.Resources.Error_Format_StageError, task.Name), ControlAppearance.Danger, SymbolRegular.ErrorCircle24);
@@ -3074,7 +3446,7 @@ namespace ExHyperV.ViewModels
             }
             else if (partition.OsType == OperatingSystemType.Linux)
             {
-                SelectedPartition = partition;
+                _selectedPartition = partition;
                 IsLoadingSettings = true;
 
                 // UI 状态转换：保持卡片开启，但切换到 SSH 表单 Grid
@@ -3100,7 +3472,7 @@ namespace ExHyperV.ViewModels
                     catch { /* 静默失败 */ }
 
                     // 检查虚拟机电源状态
-                    var status = await _vmGpuService.IsVmPoweredOffAsync(SelectedVm.Name);
+                    var status = await _queryService.IsVmPoweredOffAsync(SelectedVm.Name);
                     // 在 SelectPartitionAndContinue 方法内部：
                     if (status.IsOff)
                     {
@@ -3122,15 +3494,13 @@ namespace ExHyperV.ViewModels
                     // 扫描 IP
                     string vmIp = await Task.Run(async () =>
                     {
-                        string getMacScript = $"(Get-VMNetworkAdapter -VMName '{SelectedVm.Name}').MacAddress | Select-Object -First 1";
-                        var macResult = Utils.Run(getMacScript);
-                        if (macResult != null && macResult.Count > 0)
+                        var adapters = await _vmNetworkService.GetNetworkAdaptersAsync(SelectedVm.Name);
+                        string mac = adapters?.FirstOrDefault()?.MacAddress ?? string.Empty;
+                        if (!string.IsNullOrEmpty(mac))
                         {
-                            string rawMac = macResult[0].ToString();
-                            string formattedMac = System.Text.RegularExpressions.Regex.Replace(rawMac, "(.{2})", "$1:").TrimEnd(':');
                             for (int i = 0; i < 3; i++)
                             {
-                                var ip = await Utils.GetVmIpAddressAsync(SelectedVm.Name, formattedMac);
+                                var ip = await Utils.GetVmIpAddressAsync(SelectedVm.Name, mac);
                                 if (!string.IsNullOrEmpty(ip)) return ip;
                                 await Task.Delay(2000);
                             }
@@ -3162,8 +3532,7 @@ namespace ExHyperV.ViewModels
             }
         }
         // 开始 Linux 部署
-        // 开始 Linux 部署
-        [RelayCommand] // 之前缺失这个特性，导致按钮无效
+        [RelayCommand]
         private async Task StartLinuxDeploy()
         {
             _gpuDeploymentCts?.Cancel();
@@ -3177,7 +3546,7 @@ namespace ExHyperV.ViewModels
             // 2. 验证
             if (SelectedLinuxScript == null || string.IsNullOrWhiteSpace(SshHost))
             {
-                ShowSnackbar(Properties.Resources.Error_Common_Verify, Properties.Resources.VirtualMachinesPageViewModel_20, ControlAppearance.Caution, SymbolRegular.Warning24);
+                ShowSnackbar(Properties.Resources.Error_Common_Verify, Properties.Resources.VmPage_MemGranHugePage, ControlAppearance.Caution, SymbolRegular.Warning24);
                 return;
             }
 
@@ -3315,23 +3684,368 @@ namespace ExHyperV.ViewModels
         }
 
         // ----------------------------------------------------------------------------------
-        // UI 辅助方法
+        // 时空管理模块
         // ----------------------------------------------------------------------------------
 
-        // 显示 Snackbar 通知
-        private void ShowSnackbar(string title, string message, ControlAppearance appearance, SymbolRegular icon)
+        [ObservableProperty] private ObservableCollection<SpacetimeNode> _spacetimeNodes = new();
+
+        [ObservableProperty]
+        [NotifyCanExecuteChangedFor(nameof(TeleportCommand))]
+        [NotifyCanExecuteChangedFor(nameof(OpenWormholeCommand))]
+        [NotifyCanExecuteChangedFor(nameof(ParallelSpacetimeCommand))]
+        [NotifyCanExecuteChangedFor(nameof(AnnihilateCommand))]
+        [NotifyCanExecuteChangedFor(nameof(ConvergenceCommand))]
+        [NotifyCanExecuteChangedFor(nameof(CloseWormholeCommand))]
+        private SpacetimeNode? _selectedSpacetimeNode;
+        [ObservableProperty]
+        private SpacetimeMode _selectedSpacetimeMode = SpacetimeMode.Continuous;
+
+        [ObservableProperty]
+        private bool _isCheckpointsEnabled = true;
+
+        // 防止 GoToSpacetimeSettings 加载时触发 setter 又去写回 Hyper-V
+        private bool _isLoadingCheckpointState = false;
+
+        partial void OnIsCheckpointsEnabledChanged(bool value)
         {
-            Application.Current.Dispatcher.Invoke(() => {
-                var presenter = Application.Current.MainWindow?.FindName("SnackbarPresenter") as SnackbarPresenter;
-                if (presenter != null)
+            if (_isLoadingCheckpointState || SelectedVm == null) return;
+
+            _ = Task.Run(async () =>
+            {
+                var result = await _spacetimeService.SetCheckpointsEnabledAsync(SelectedVm.Name, value);
+                if (!result.Success)
                 {
-                    var snack = new Snackbar(presenter) { Title = title, Content = message, Appearance = appearance, Icon = new SymbolIcon(icon), Timeout = TimeSpan.FromSeconds(3) };
-                    snack.Show();
+                    // 失败时回滚 UI 状态
+                    Application.Current.Dispatcher.Invoke(() =>
+                    {
+                        _isLoadingCheckpointState = true;
+                        IsCheckpointsEnabled = !value;
+                        _isLoadingCheckpointState = false;
+                        ShowSnackbar(Properties.Resources.VmPage_MsgProcessReset, result.Message, ControlAppearance.Danger, SymbolRegular.ErrorCircle24);
+                    });
+                }
+                else
+                {
                 }
             });
         }
 
-        // 获取操作状态的乐观显示文本
+
+
+        /// <summary>
+        /// 判定逻辑：只有选中的是真实的历史快照节点（非现世指针、非虚拟根节点）时，才允许执行穿梭、删除等操作。
+        /// </summary>
+        private bool CanOperateHistoricalNode => SelectedSpacetimeNode != null &&
+                                                SelectedSpacetimeNode.NodeType == SpacetimeNodeType.Snapshot;
+
+        [RelayCommand]
+        private async Task CommitSpacetimeRenameAsync(SpacetimeNode node)
+        {
+            if (node == null || !node.IsEditing) return;
+            node.IsEditing = false;
+            if (string.IsNullOrWhiteSpace(node.EditedName) || node.EditedName == node.Name) return;
+
+            // 起源和当前节点禁止改名
+            if (node.IsLogicalNode) return;
+
+            IsLoadingSettings = true;
+            try
+            {
+                var result = await _spacetimeService.RenameSnapshotAsync(node.Path, node.EditedName);
+                if (result.Success)
+                {
+                    node.Name = node.EditedName;
+                    OnPropertyChanged(nameof(SpacetimeNodes));
+                }
+                else
+                {
+                    ShowSnackbar(Properties.Resources.VmPage_LogDiskSaveResult, result.Message, ControlAppearance.Danger, SymbolRegular.ErrorCircle24);
+                }
+            }
+            finally
+            {
+                IsLoadingSettings = false;
+            }
+        }
+        [RelayCommand]
+        private void CancelSpacetimeRename(SpacetimeNode node)
+        {
+            if (node != null) node.IsEditing = false;
+        }
+
+        [RelayCommand]
+        private async Task GoToSpacetimeSettings()
+        {
+            if (SelectedVm == null) return;
+            CurrentViewType = VmDetailViewType.SpacetimeSettings;
+            IsLoadingSettings = true;
+            try
+            {
+                _isLoadingCheckpointState = true;
+                IsCheckpointsEnabled = await _spacetimeService.GetCheckpointsEnabledAsync(SelectedVm.Name);
+                _isLoadingCheckpointState = false;
+
+                var nodes = await _spacetimeService.GetSpacetimeNodesAsync(SelectedVm.Name);
+
+                // --- 逻辑优化：处理纯净态（仅有起源和当前时空） ---
+                var snapshots = nodes.Where(n => n.NodeType == SpacetimeNodeType.Snapshot).ToList();
+                if (!snapshots.Any())
+                {
+                    var genesis = nodes.FirstOrDefault(n => n.NodeType == SpacetimeNodeType.Genesis);
+                    var current = nodes.FirstOrDefault(n => n.NodeType == SpacetimeNodeType.Current);
+                    if (genesis != null && current != null)
+                    {
+                        // 1. 将起源的时间（原始 VHDX 时间）赋予当前
+                        current.CreatedDate = genesis.CreatedDate;
+                        // 2. 将当前设为根节点（去掉父 ID）
+                        current.ParentId = null;
+                        // 3. 移除起源节点
+                        nodes.Remove(genesis);
+                    }
+                }
+
+                // 更新集合
+                SpacetimeNodes = new ObservableCollection<SpacetimeNode>(nodes);
+
+                // 优先选中“当前”节点（现在它可能是唯一的根，也可能是快照链的末端）
+                var currentNode = nodes.FirstOrDefault(n => n.NodeType == SpacetimeNodeType.Current);
+                if (currentNode != null)
+                {
+                    SelectedSpacetimeNode = currentNode;
+                }
+            }
+            catch (Exception ex)
+            {
+                ShowSnackbar(Properties.Resources.VmPage_ErrRetrieveFailed2, ex.Message, ControlAppearance.Danger, SymbolRegular.ErrorCircle24);
+            }
+            finally
+            {
+                IsLoadingSettings = false;
+            }
+        }
+        // 捕捉瞬间 (创建快照)
+        [RelayCommand]
+        private async Task CaptureMoment()
+        {
+            if (SelectedVm == null) return;
+
+            var currentFrame = SelectedVm.Thumbnail;
+
+            // 核心改进：使用 IsLoadingSettings 开启局部遮罩，不锁死左侧列表
+            IsLoadingSettings = true;
+            try
+            {
+                var result = await _spacetimeService.CaptureMomentAsync(
+                    SelectedVm.Name,
+                    SelectedSpacetimeMode
+                );
+
+                if (result.Success)
+                {
+                    // 关键点：给 WMI 数据库一点点沉降时间，防止立刻刷新读不到新生成的快照文件
+                    await Task.Delay(1000);
+
+                    // 重新获取节点，由于在 finally 之前调用，遮罩会一直持续到节点树重新画好
+                    await GoToSpacetimeSettings();
+
+                    ShowSnackbar(Properties.Resources.VmPage_MsgOperationOk5, Properties.Resources.VmPage_MsgSpacetimeCreated2, ControlAppearance.Success, SymbolRegular.CheckmarkCircle24);
+                }
+                else
+                {
+                    ShowSnackbar(Properties.Resources.VmPage_MsgProcessReset, result.Message, ControlAppearance.Danger, SymbolRegular.ErrorCircle24);
+                }
+            }
+            finally
+            {
+                IsLoadingSettings = false;
+            }
+        }
+
+        // 穿梭 (应用快照)
+        [RelayCommand(CanExecute = nameof(CanOperateHistoricalNode))]
+        private async Task Teleport()
+        {
+            if (SelectedSpacetimeNode == null || SelectedVm == null) return;
+            IsLoadingSettings = true;
+            try
+            {
+                // 穿梭前关闭所有虫洞
+                var wormholeNodes = SpacetimeNodes?.Where(n => n.IsWormhole).ToList();
+                if (wormholeNodes != null && wormholeNodes.Any())
+                {
+                    foreach (var wNode in wormholeNodes)
+                        await _spacetimeService.CloseWormholeAsync(SelectedVm.Name, wNode);
+                }
+
+                string targetName = SelectedSpacetimeNode.Name;
+                var result = await _spacetimeService.TeleportAsync(SelectedSpacetimeNode, SelectedVm.Name);
+                if (result.Success)
+                {
+                    await Task.Delay(500);
+                    await GoToSpacetimeSettings();
+                    ShowSnackbar(Properties.Resources.VmPage_MsgOperationOk5, string.Format(Properties.Resources.VmPage_MsgTraveledTo2, targetName), ControlAppearance.Success, SymbolRegular.ArrowClockwise24);
+                }
+                else
+                {
+                    ShowSnackbar(Properties.Resources.VmPage_MsgProcessReset, result.Message, ControlAppearance.Danger, SymbolRegular.ErrorCircle24);
+                }
+            }
+            finally { IsLoadingSettings = false; }
+        }
+
+        [RelayCommand(CanExecute = nameof(CanOperateHistoricalNode))]
+        private async Task Annihilate()
+        {
+            if (SelectedSpacetimeNode == null || SelectedVm == null) return;
+
+            IsLoadingSettings = true;
+            try
+            {
+                var result = await _spacetimeService.AnnihilateAsync(SelectedVm.Name, SelectedSpacetimeNode);
+                if (result.Success)
+                {
+                    await Task.Delay(800);
+                    await GoToSpacetimeSettings();
+                    ShowSnackbar(Properties.Resources.VmPage_MsgOperationOk5, Properties.Resources.VmPage_MsgSpacetimeAnnihilated2, ControlAppearance.Success, SymbolRegular.Delete24);
+                }
+            }
+            finally { IsLoadingSettings = false; }
+        }
+
+        // 开启虫洞
+        [RelayCommand(CanExecute = nameof(CanOperateHistoricalNode))]
+        private async Task OpenWormhole()
+        {
+            if (SelectedSpacetimeNode == null || SelectedVm == null) return;
+            IsLoadingSettings = true;
+            try
+            {
+                var result = await _spacetimeService.OpenWormholeAsync(SelectedVm.Name, SelectedSpacetimeNode);
+                if (result.Success)
+                {
+                    string openedNodeId = SelectedSpacetimeNode.Id;
+                    await GoToSpacetimeSettings();
+                    var wormholeNode = SpacetimeNodes.FirstOrDefault(n => n.Id == openedNodeId);
+                    if (wormholeNode != null) SelectedSpacetimeNode = wormholeNode;
+                    ShowSnackbar(Properties.Resources.VmSpacetimeService_MsgWormholeOpened, string.Format(Properties.Resources.VmPage_MsgConnectedTo2, SelectedSpacetimeNode.Name), ControlAppearance.Success, SymbolRegular.Link24);
+                }
+                else
+                {
+                    ShowSnackbar(Properties.Resources.VmPage_ErrOpenFailed4, result.Message, ControlAppearance.Danger, SymbolRegular.ErrorCircle24);
+                }
+            }
+            finally { IsLoadingSettings = false; }
+        }
+
+        [RelayCommand(CanExecute = nameof(CanOperateHistoricalNode))]
+        private async Task CloseWormhole()
+        {
+            if (SelectedSpacetimeNode == null || SelectedVm == null) return;
+            IsLoadingSettings = true;
+            try
+            {
+                var result = await _spacetimeService.CloseWormholeAsync(SelectedVm.Name, SelectedSpacetimeNode);
+                if (result.Success)
+                {
+                    await GoToSpacetimeSettings();
+                    ShowSnackbar(Properties.Resources.VmPage_MsgWormholeClosed2, Properties.Resources.VmPage_MsgTimelineRestored2, ControlAppearance.Success, SymbolRegular.LinkDismiss24);
+                }
+                else
+                {
+                    ShowSnackbar(Properties.Resources.VmPage_ErrCloseFailed2, result.Message, ControlAppearance.Danger, SymbolRegular.ErrorCircle24);
+                }
+            }
+            finally { IsLoadingSettings = false; }
+        }
+
+        // 平行宇宙
+        [RelayCommand(CanExecute = nameof(CanOperateHistoricalNode))]
+        private void ParallelSpacetime()
+        {
+            ShowSnackbar(Properties.Resources.VmPage_MsgFeatureInDev2, Properties.Resources.VmPage_MsgParallelUniverse2, ControlAppearance.Info, SymbolRegular.Copy24);
+        }
+
+        // 时空收束
+        [RelayCommand(CanExecute = nameof(CanOperateHistoricalNode))]
+        private async Task Convergence()
+        {
+            if (SelectedSpacetimeNode == null || SelectedVm == null) return;
+
+            // 同样改为局部加载
+            IsLoadingSettings = true;
+            try
+            {
+                var result = await _spacetimeService.ConvergeAsync(SelectedVm.Name, SelectedSpacetimeNode);
+                if (result.Success)
+                {
+                    await Task.Delay(800);
+                    await GoToSpacetimeSettings();
+                    ShowSnackbar(Properties.Resources.VmPage_MsgOperationOk5, Properties.Resources.VmPage_MsgSpacetimeConverged2, ControlAppearance.Success, SymbolRegular.Merge24);
+                }
+            }
+            finally { IsLoadingSettings = false; }
+        }
+        // ----------------------------------------------------------------------------------
+        // UI 辅助方法
+        // ----------------------------------------------------------------------------------
+
+        // 显示 Snackbar 通知
+        private Snackbar? _currentSnackbar;
+        private void ShowSnackbar(string title, string message, ControlAppearance appearance, SymbolRegular icon)
+        {
+            // 使用 Background 优先级，同时加上 async 支持 await 操作
+            Application.Current.Dispatcher.InvokeAsync(async () => {
+                var presenter = Application.Current.MainWindow?.FindName("SnackbarPresenter") as SnackbarPresenter;
+                if (presenter != null)
+                {
+                    // 核心修复 1：暴力清空积压队列
+                    try
+                    {
+                        var queueProp = typeof(SnackbarPresenter).GetProperty("Queue", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                        var queueObj = queueProp?.GetValue(presenter);
+                        queueObj?.GetType().GetMethod("Clear")?.Invoke(queueObj, null);
+                    }
+                    catch { }
+
+                    // 核心修复 2：使用官方推荐的 HideCurrent() 安全关闭
+                    try
+                    {
+                        await presenter.HideCurrent();
+                    }
+                    catch { }
+
+                    // --- 核心优化：动态计算弹窗留存时间 ---
+                    TimeSpan timeout;
+                    if (appearance == ControlAppearance.Danger || appearance == ControlAppearance.Caution)
+                    {
+                        int msgLength = message?.Length ?? 0;
+
+                        // 算法：每 20 个字符增加 1 秒
+                        int calculatedSeconds = msgLength / 20;
+
+                        calculatedSeconds = Math.Clamp(calculatedSeconds, 2, 60);
+
+                        timeout = TimeSpan.FromSeconds(calculatedSeconds);
+                    }
+                    else
+                    {
+                        // 成功或常规消息固定 2 秒
+                        timeout = TimeSpan.FromSeconds(2);
+                    }
+
+                    var snack = new Snackbar(presenter)
+                    {
+                        Title = title,
+                        Content = message,
+                        Appearance = appearance,
+                        Icon = new SymbolIcon(icon),
+                        Timeout = timeout
+                    };
+
+                    snack.Show();
+                }
+            }, System.Windows.Threading.DispatcherPriority.Background);
+        }
         private string GetOptimisticText(string action) => action switch { "Start" => Properties.Resources.Status_Starting, "Restart" => Properties.Resources.Status_Restarting, "Stop" => Properties.Resources.Status_StoppingPresent, "TurnOff" => Properties.Resources.Status_Off, "Save" => Properties.Resources.Status_Saving, "Suspend" => Properties.Resources.Status_Suspending, _ => Properties.Resources.Status_Processing };
 
         // 追加日志到控制台
@@ -3398,7 +4112,7 @@ namespace ExHyperV.ViewModels
                     SelectedPartition = null;
                 }
 
-                AppendLog($"--- {Properties.Resources.Label_Progress} ({Properties.Resources.VirtualMachinesPageViewModel_24}) ---");
+                AppendLog($"--- {Properties.Resources.Label_Progress} ({Properties.Resources.VmPage_MemGranHugePage2}) ---");
                 return;
             }
             // --- 场景 2: “硬重置”（彻底回滚，回到选显卡第一步） ---
@@ -3407,16 +4121,16 @@ namespace ExHyperV.ViewModels
             // 1. 如果当前有正在处理的分区 ID（说明已经分配但未成功），执行物理回滚
             if (!string.IsNullOrEmpty(_currentProcessingGpuAdapterId))
             {
-                AppendLog(Properties.Resources.VirtualMachinesPageViewModel_21); // "正在回滚 GPU 分配..."
+                AppendLog(Properties.Resources.VmPage_MemGranAutoAssign2); // Properties.Resources.VmPage_MsgRollingBackGpu2
                 try
                 {
                     await _vmGpuService.RemoveGpuPartitionAsync(SelectedVm.Name, _currentProcessingGpuAdapterId);
                     _currentProcessingGpuAdapterId = null;
-                    AppendLog(Properties.Resources.VirtualMachinesPageViewModel_22); // "回滚完成。"
+                    AppendLog(Properties.Resources.VmPage_MemGranStandard2); // Properties.Resources.VmPage_MsgRollbackComplete2
                 }
                 catch (Exception ex)
                 {
-                    AppendLog(string.Format(Properties.Resources.VirtualMachinesPageViewModel_23, ex.Message)); // "回滚失败: {0}"
+                    AppendLog(string.Format(Properties.Resources.VmPage_MemGranLargePage2, ex.Message)); // Properties.Resources.VmPage_ErrRollbackFailed2
                 }
             }
 
@@ -3432,8 +4146,8 @@ namespace ExHyperV.ViewModels
 
             // 4. 弹出全局重置提示
             ShowSnackbar(
-                Properties.Resources.VirtualMachinesPageViewModel_24, // "重置"
-                Properties.Resources.VirtualMachinesPageViewModel_25, // "流程已重置，请重新选择显卡。"
+                Properties.Resources.VmPage_MemGranHugePage2, // Properties.Resources.VmPage_BtnReset2
+                Properties.Resources.VmPage_MemTrackDisable, // Properties.Resources.VmPage_MsgProcessReset2
                 Wpf.Ui.Controls.ControlAppearance.Info,
                 Wpf.Ui.Controls.SymbolRegular.ArrowCounterclockwise24);
         }
@@ -3444,7 +4158,7 @@ namespace ExHyperV.ViewModels
                 // 只有当选中且运行时才更新
                 if (SelectedVm != null && SelectedVm.IsRunning)
                 {
-                    var img = await VmThumbnailProvider.GetThumbnailAsync(SelectedVm.Name, 320, 240);
+                    var img = await VmScreenshotService.CaptureAsync(SelectedVm.Name, 320, 240);
                     if (img != null)
                     {
                         Application.Current.Dispatcher.Invoke(() => SelectedVm.Thumbnail = img);
@@ -3459,5 +4173,27 @@ namespace ExHyperV.ViewModels
                 await Task.Delay(1500, token);
             }
         }
+        // 获取目录，用于 InitialDirectory
+        private string GetDir(string? path)
+        {
+            if (string.IsNullOrWhiteSpace(path)) return string.Empty;
+            try
+            {
+                return Path.GetDirectoryName(path) ?? string.Empty;
+            }
+            catch { return string.Empty; }
+        }
+
+        // 获取文件名，用于 SaveFileDialog 的 FileName
+        private string GetFileName(string? path, string defaultNameWithExt)
+        {
+            if (string.IsNullOrWhiteSpace(path)) return defaultNameWithExt;
+            try
+            {
+                return Path.GetFileName(path) ?? defaultNameWithExt;
+            }
+            catch { return defaultNameWithExt; }
+        }
+
     }
 }
