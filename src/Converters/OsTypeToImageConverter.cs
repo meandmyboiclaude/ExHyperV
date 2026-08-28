@@ -1,7 +1,6 @@
-﻿using System;
+﻿using ExHyperV.Tools;
 using System.Windows.Data;
 using System.Windows.Media.Imaging;
-using ExHyperV.Tools;
 
 
 namespace ExHyperV.Converters

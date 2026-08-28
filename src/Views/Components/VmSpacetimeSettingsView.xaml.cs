@@ -1,3 +1,5 @@
+using ExHyperV.Models;
+using ExHyperV.ViewModels;
 using System.Diagnostics;
 using System.IO;
 using System.Windows;
@@ -7,8 +9,6 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
 using System.Windows.Threading;
-using ExHyperV.Models;
-using ExHyperV.ViewModels;
 using Wpf.Ui.Appearance;
 using Brush = System.Windows.Media.Brush;
 using Brushes = System.Windows.Media.Brushes;
@@ -36,7 +36,8 @@ namespace ExHyperV.Views.Components
         {
             InitializeComponent();
             _liveTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
-            _liveTimer.Tick += (s, e) => {
+            _liveTimer.Tick += (s, e) =>
+            {
                 if (DataContext is VirtualMachinesPageViewModel vm)
                 {
                     var currentNode = vm.SpacetimeNodes?.FirstOrDefault(n => n.NodeType == SpacetimeNodeType.Current);
@@ -52,7 +53,8 @@ namespace ExHyperV.Views.Components
             };
             _liveTimer.Start();
 
-            this.DataContextChanged += (s, e) => {
+            this.DataContextChanged += (s, e) =>
+            {
                 if (_boundVm != null)
                 {
                     _boundVm.PropertyChanged -= OnVmPropertyChanged;
@@ -72,7 +74,8 @@ namespace ExHyperV.Views.Components
                 }
             };
 
-            this.Loaded += (s, e) => {
+            this.Loaded += (s, e) =>
+            {
                 if (_needsInitialCenter) RenderSpacetimeFlow();
             };
             ApplicationThemeManager.Changed += (theme, color) =>
@@ -523,7 +526,8 @@ namespace ExHyperV.Views.Components
             var anchorGroup = new Grid { Width = 200, Height = 160, Cursor = Cursors.Hand, Tag = data, Background = null };
 
             // 改用 MouseLeftButtonUp 触发选中，且不 Handled，事件正常冒泡
-            anchorGroup.MouseLeftButtonUp += (s, e) => {
+            anchorGroup.MouseLeftButtonUp += (s, e) =>
+            {
                 Debug.WriteLine($"[DRAG] *** Node MouseUp isDragging={_isDragging} " +
                     $"node={(((Grid)s).Tag as SpacetimeNode)?.Name}");
                 // 拖动后的 MouseUp 不能触发选中，否则拖完之后会意外切换选中节点

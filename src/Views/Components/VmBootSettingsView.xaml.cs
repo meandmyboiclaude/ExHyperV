@@ -1,6 +1,4 @@
-﻿using System.Windows.Controls;
-
-namespace ExHyperV.Views.Components
+﻿namespace ExHyperV.Views.Components
 {
     public partial class VmBootSettingsView : UserControl
     {

@@ -1,7 +1,7 @@
-﻿using System.IO;
-using System.Text;
-using ExHyperV.Models;
+﻿using ExHyperV.Models;
 using Renci.SshNet;
+using System.IO;
+using System.Text;
 
 namespace ExHyperV.Services
 {
@@ -118,7 +118,7 @@ namespace ExHyperV.Services
                 return new SshCommandResult(outputBuilder.ToString(), sshCommand.ExitStatus ?? -1);
             }
         }
-        
+
         private async Task ReadStreamAsync(Stream stream, Encoding encoding, Action<string> logCallback)
         {
             var buffer = new byte[1024];

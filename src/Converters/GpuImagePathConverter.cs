@@ -1,7 +1,7 @@
-﻿using System.Globalization;
+﻿using ExHyperV.Tools;
+using System.Globalization;
 using System.Windows.Data;
 using System.Windows.Media.Imaging;
-using ExHyperV.Tools;
 
 namespace ExHyperV.Converters
 {

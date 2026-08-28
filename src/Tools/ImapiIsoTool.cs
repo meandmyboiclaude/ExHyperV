@@ -1,7 +1,6 @@
-﻿using System;
+﻿using IMAPI2FS;
 using System.IO;
 using System.Runtime.InteropServices;
-using IMAPI2FS;
 
 namespace ExHyperV.Tools
 {

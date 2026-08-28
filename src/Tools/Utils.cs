@@ -1,11 +1,9 @@
-using System.Diagnostics;
-using System.Management;
+using ExHyperV.Api;
+using Microsoft.Win32;
 using System.Net;
 using System.Net.Sockets;
 using System.Reflection;
 using System.Text.RegularExpressions;
-using ExHyperV.Api;
-using Microsoft.Win32;
 using Wpf.Ui.Controls;
 
 namespace ExHyperV.Tools;

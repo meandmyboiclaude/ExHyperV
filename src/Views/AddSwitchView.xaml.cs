@@ -1,6 +1,4 @@
-﻿using System.Windows.Controls;
-
-namespace ExHyperV.Views
+﻿namespace ExHyperV.Views
 {
     public partial class AddSwitchView : UserControl
     {

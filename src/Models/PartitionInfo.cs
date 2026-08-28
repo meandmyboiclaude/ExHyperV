@@ -1,6 +1,4 @@
-﻿using System;
-
-namespace ExHyperV.Models 
+﻿namespace ExHyperV.Models
 {
     public enum OperatingSystemType
     {

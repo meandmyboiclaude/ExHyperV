@@ -1,12 +1,9 @@
-using System.Diagnostics;
-using System.Collections.Generic;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using ExHyperV.Properties;
 using ExHyperV.Services;
 using ExHyperV.Tools;
-using System.Threading.Tasks;
-using System;
+using System.Diagnostics;
 
 namespace ExHyperV.ViewModels
 {
@@ -91,7 +88,7 @@ namespace ExHyperV.ViewModels
                 Debug.WriteLine($"Failed to open release page '{url}': {ex.Message}");
             }
         }
-        public string CopyrightInfo => "© 2026 | " + Utils.Author+ " | " + Utils.Version;
+        public string CopyrightInfo => "© 2026 | " + Utils.Author + " | " + Utils.Version;
 
         public SettingsViewModel()
         {

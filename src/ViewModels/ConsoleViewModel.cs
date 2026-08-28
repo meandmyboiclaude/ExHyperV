@@ -1,13 +1,9 @@
-using System;
-using System.Diagnostics;
-using System.Linq;
-using System.Collections.ObjectModel;
-using System.Threading.Tasks;
-using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
-using Wpf.Ui.Controls;
 using ExHyperV.Services;
+using System.Collections.ObjectModel;
+using System.Diagnostics;
+using System.Windows.Threading;
 
 namespace ExHyperV.ViewModels
 {
@@ -21,7 +17,7 @@ namespace ExHyperV.ViewModels
         [ObservableProperty] private string _vmName;
         [ObservableProperty] private bool _isLoading = true;
         [ObservableProperty] private bool _isRunning;
-        
+
         [ObservableProperty]
         [NotifyPropertyChangedFor(nameof(IsNotBusy))]
         [NotifyCanExecuteChangedFor(nameof(StartVmCommand))]

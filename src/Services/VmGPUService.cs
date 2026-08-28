@@ -1,3 +1,7 @@
+using ExHyperV.Api;
+using ExHyperV.Models;
+using ExHyperV.Tools;
+using Renci.SshNet;
 using System.Diagnostics;
 using System.IO;
 using System.Management;
@@ -5,10 +9,6 @@ using System.Net.Http;
 using System.Net.Sockets;
 using System.Text.Json;
 using System.Text.RegularExpressions;
-using ExHyperV.Api;
-using ExHyperV.Models;
-using ExHyperV.Tools;
-using Renci.SshNet;
 
 namespace ExHyperV.Services
 {
@@ -112,7 +112,8 @@ namespace ExHyperV.Services
             // 1. Win32_VideoController
             var gpuResp = await WmiApi.QueryAsync(
                 "SELECT PNPDeviceID, Name, AdapterCompatibility, DriverVersion FROM Win32_VideoController",
-                obj => new {
+                obj => new
+                {
                     Name = obj["Name"]?.ToString(),
                     InstanceId = obj["PNPDeviceID"]?.ToString(),
                     Manu = obj["AdapterCompatibility"]?.ToString(),
@@ -513,7 +514,7 @@ namespace ExHyperV.Services
                 return true;
             }
             catch { return false; }
-        }        
+        }
         #endregion
 
         #region Windows 驱动环境注入
@@ -851,7 +852,7 @@ namespace ExHyperV.Services
             LinkSingleFile(assignedDriveLetter, "atiapfxx.blb", "atiapfxx.blb", s32);
             LinkSingleFile(assignedDriveLetter, "ativvsva.dat", "ativvsva.dat", s32);
             LinkSingleFile(assignedDriveLetter, "ativvsvl.dat", "ativvsvl.dat", s32);
-            LinkSingleFile(assignedDriveLetter, "AMDKernelEvents.mc", "AMDKernelEvents.man", s32); 
+            LinkSingleFile(assignedDriveLetter, "AMDKernelEvents.mc", "AMDKernelEvents.man", s32);
             LinkSingleFile(assignedDriveLetter, "detoured64.dll", "detoured.dll", s32);
 
             // 特殊子目录 (amdkmpfd)
@@ -881,7 +882,7 @@ namespace ExHyperV.Services
             LinkSingleFile(assignedDriveLetter, "GameManager32.dll", "GameManager32.dll", sw64);
 
             // 32位特殊命名映射
-            LinkSingleFile(assignedDriveLetter, "atiadlxy.dll", "atiadlxx.dll", sw64); 
+            LinkSingleFile(assignedDriveLetter, "atiadlxy.dll", "atiadlxx.dll", sw64);
             LinkSingleFile(assignedDriveLetter, "detoured32.dll", "detoured.dll", sw64);
 
             // 资源
@@ -984,7 +985,7 @@ namespace ExHyperV.Services
                         ExecuteCommand($"cmd /c del /f /q \"{hostLinkPath}\"");
                     }
                 }
-                catch {}
+                catch { }
 
                 var foundFiles = new DirectoryInfo(guestRepo)
                                     .GetFiles(sourceName, SearchOption.AllDirectories)

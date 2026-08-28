@@ -1,6 +1,6 @@
+using ExHyperV.Api;
 using System.Diagnostics;
 using System.Management;
-using ExHyperV.Api;
 
 namespace ExHyperV.Services;
 

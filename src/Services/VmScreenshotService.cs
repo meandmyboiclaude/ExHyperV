@@ -1,8 +1,8 @@
-﻿using System.Collections.Concurrent;
+﻿using ExHyperV.Api;
+using System.Collections.Concurrent;
 using System.Management;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
-using ExHyperV.Api;
 
 namespace ExHyperV.Services
 {
@@ -21,7 +21,8 @@ namespace ExHyperV.Services
                     {
                         var settingsResp = WmiApi.QueryFirstAsync(
                             $"SELECT * FROM Msvm_ComputerSystem WHERE ElementName = '{WmiApi.Escape(vmName)}'",
-                            vm => {
+                            vm =>
+                            {
                                 using var related = vm.GetRelated("Msvm_VirtualSystemSettingData");
                                 return related.Cast<ManagementObject>().FirstOrDefault()?.Path.Path ?? "";
                             }, WmiScope.HyperV).GetAwaiter().GetResult();

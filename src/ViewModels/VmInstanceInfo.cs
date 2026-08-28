@@ -1,13 +1,11 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using ExHyperV.Properties;
+using ExHyperV.Services;
 using System.Collections.ObjectModel;
 using System.IO;
-using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Imaging; // 引用 BitmapSource
-using ExHyperV.Properties;
-using ExHyperV.Tools;
-using ExHyperV.Services;
 
 namespace ExHyperV.Models
 {
@@ -295,11 +293,11 @@ namespace ExHyperV.Models
 
         [ObservableProperty]
         [NotifyPropertyChangedFor(nameof(ConfigSummary))]
-        [NotifyPropertyChangedFor(nameof(CanChangeBootOrder))] 
+        [NotifyPropertyChangedFor(nameof(CanChangeBootOrder))]
         private int _generation;
 
         [ObservableProperty] private string _version;
-        [ObservableProperty] private string _osType;          
+        [ObservableProperty] private string _osType;
         [ObservableProperty] private string _state;
         [ObservableProperty] private string _uptime = "00:00:00";
         [ObservableProperty]

@@ -1,11 +1,11 @@
-﻿using System.Collections.ObjectModel;
-using CommunityToolkit.Mvvm.ComponentModel;
+﻿using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using ExHyperV.Models;
 using ExHyperV.Properties;
 using ExHyperV.Services;
 using ExHyperV.Tools;
 using ExHyperV.Views;
+using System.Collections.ObjectModel;
 
 namespace ExHyperV.ViewModels
 {

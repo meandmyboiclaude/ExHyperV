@@ -1,11 +1,10 @@
+using ExHyperV.Api;
+using ExHyperV.Models;
 using System.Diagnostics;
 using System.IO;
 using System.Management;
 using System.Text.RegularExpressions;
 using System.Windows.Media.Imaging;
-using ExHyperV.Api;
-using ExHyperV.Models;
-using ExHyperV.Tools;
 
 namespace ExHyperV.Services;
 

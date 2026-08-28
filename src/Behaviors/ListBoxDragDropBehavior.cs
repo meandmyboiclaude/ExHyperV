@@ -1,10 +1,9 @@
-﻿using System;
+﻿using ExHyperV.Models;
+using Microsoft.Xaml.Behaviors;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
-using Microsoft.Xaml.Behaviors;
-using ExHyperV.Models;
 
 namespace ExHyperV.Behaviors
 {

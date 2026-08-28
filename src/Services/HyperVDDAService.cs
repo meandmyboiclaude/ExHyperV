@@ -1,7 +1,7 @@
-﻿using System.Diagnostics;
-using ExHyperV.Api;
+﻿using ExHyperV.Api;
 using ExHyperV.Models;
 using ExHyperV.Properties;
+using System.Diagnostics;
 
 namespace ExHyperV.Services
 {
@@ -367,7 +367,8 @@ namespace ExHyperV.Services
                     return await WmiApi.InvokeAsync(
                         "SELECT * FROM Msvm_VirtualSystemManagementService",
                         "AddResourceSettings",
-                        p => {
+                        p =>
+                        {
                             p["AffectedConfiguration"] = vmSetting["__PATH"]?.ToString();
                             p["ResourceSettings"] = new string[] { template.GetText(System.Management.TextFormat.CimDtd20) };
                         },
@@ -380,7 +381,8 @@ namespace ExHyperV.Services
                 WmiAction: () => WmiApi.InvokeAsync(
                     "SELECT * FROM Msvm_AssignableDeviceService",
                     "DismountAssignableDevice",
-                    p => {
+                    p =>
+                    {
                         var ms = WmiConnectionCache.GetManagementScope(WmiScope.HyperV, WmiContext.Local);
                         using var cls = new System.Management.ManagementClass(ms, new System.Management.ManagementPath("Msvm_AssignableDeviceDismountSettingData"), null);
                         using var inst = cls.CreateInstance();

@@ -1,6 +1,4 @@
-﻿using System;
-
-namespace ExHyperV.Tools
+﻿namespace ExHyperV.Tools
 {
     public static class LayoutHelper
     {

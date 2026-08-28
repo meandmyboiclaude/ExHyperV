@@ -1,6 +1,6 @@
-﻿using System.Management;
-using ExHyperV.Api;
+﻿using ExHyperV.Api;
 using Microsoft.Win32;
+using System.Management;
 
 namespace ExHyperV.Services
 {

@@ -1,9 +1,9 @@
-﻿using System.Collections.ObjectModel;
-using CommunityToolkit.Mvvm.ComponentModel;
+﻿using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using ExHyperV.Models;
 using ExHyperV.Services;
 using ExHyperV.Tools;
+using System.Collections.ObjectModel;
 
 namespace ExHyperV.ViewModels
 {
@@ -126,4 +126,4 @@ namespace ExHyperV.ViewModels
             _ => "Isolated"
         };
     }
-    }
+}

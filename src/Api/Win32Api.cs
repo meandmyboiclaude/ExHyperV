@@ -2,8 +2,6 @@
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
-using System.Text.RegularExpressions;
-using Microsoft.Win32;
 
 namespace ExHyperV.Api;
 

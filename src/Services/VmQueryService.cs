@@ -97,7 +97,8 @@ namespace ExHyperV.Services
                     obj["PNPDeviceID"]?.ToString() ?? ""
                 ), WmiScope.CimV2);
 
-            var summaryTask = WmiApi.QueryAsync(QuerySummary, obj => {
+            var summaryTask = WmiApi.QueryAsync(QuerySummary, obj =>
+            {
                 long rawMem = Convert.ToInt64(obj["MemoryUsage"] ?? 0);
                 return new SummaryItem(
                     obj["Name"]?.ToString() ?? "",
@@ -115,7 +116,8 @@ namespace ExHyperV.Services
                 Convert.ToDouble(obj["VirtualQuantity"] ?? 0)
             ), WmiScope.HyperV);
 
-            var configTask = WmiApi.QueryAsync(QuerySettings, obj => {
+            var configTask = WmiApi.QueryAsync(QuerySettings, obj =>
+            {
                 string subType = obj["VirtualSystemSubType"]?.ToString() ?? "";
                 int gen = subType.EndsWith(":1") ? 1 : (subType.EndsWith(":2") ? 2 : 0);
                 return new ConfigItem(
@@ -215,7 +217,8 @@ namespace ExHyperV.Services
                     _switchNameCache[sw.Guid] = sw.Name;
 
             var allocsMap = allAllocs
-                .GroupBy(a => {
+                .GroupBy(a =>
+                {
                     int idx = a.InstanceID.LastIndexOf('\\');
                     return idx > 0 ? a.InstanceID.Substring(0, idx) : a.InstanceID;
                 }, StringComparer.OrdinalIgnoreCase)
@@ -478,7 +481,8 @@ namespace ExHyperV.Services
         {
             var resp = await WmiApi.QueryAsync(
                 "SELECT Name, MemoryUsage, MemoryAvailable FROM Msvm_SummaryInformation",
-                obj => {
+                obj =>
+                {
                     long usage = Convert.ToInt64(obj["MemoryUsage"] ?? 0);
                     return new MemRuntimeItem(
                         obj["Name"]?.ToString() ?? "",

@@ -1,9 +1,9 @@
-﻿using System.Collections.Concurrent;
+﻿using ExHyperV.Api;
+using ExHyperV.Models;
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
-using ExHyperV.Api;
-using ExHyperV.Models;
 
 namespace ExHyperV.Services
 {

@@ -1,7 +1,7 @@
-﻿using Wpf.Ui.Controls;
-using ExHyperV.ViewModels;
+﻿using ExHyperV.ViewModels;
 using System.ComponentModel;
 using System.Windows.Input;
+using Wpf.Ui.Controls;
 
 namespace ExHyperV.Views
 {

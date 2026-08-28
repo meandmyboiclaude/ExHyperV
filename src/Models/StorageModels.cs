@@ -4,8 +4,8 @@ namespace ExHyperV.Models
     public class AttachedDriveInfo
     {
         public int ControllerLocation { get; set; }
-        public string DriveType { get; set; } 
-        public string DiskType { get; set; }  
+        public string DriveType { get; set; }
+        public string DiskType { get; set; }
         public string PathOrDiskNumber { get; set; }
         public string DiskModel { get; set; }
         public double DiskSizeGB { get; set; }
@@ -17,7 +17,7 @@ namespace ExHyperV.Models
     {
         public string VMName { get; set; }
         public int Generation { get; set; }
-        public string ControllerType { get; set; } 
+        public string ControllerType { get; set; }
         public int ControllerNumber { get; set; }
         public List<AttachedDriveInfo> AttachedDrives { get; set; } = new();
     }

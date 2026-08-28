@@ -1,7 +1,7 @@
-using System.Management;
-using System.Text.RegularExpressions;
 using ExHyperV.Api;
 using ExHyperV.Models;
+using System.Management;
+using System.Text.RegularExpressions;
 
 namespace ExHyperV.Services;
 

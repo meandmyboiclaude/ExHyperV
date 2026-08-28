@@ -1,3 +1,10 @@
+using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
+using ExHyperV.Api;
+using ExHyperV.Behaviors;
+using ExHyperV.Models;
+using ExHyperV.Services;
+using ExHyperV.Tools;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
@@ -8,13 +15,6 @@ using System.Windows.Data;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
-using CommunityToolkit.Mvvm.ComponentModel;
-using CommunityToolkit.Mvvm.Input;
-using ExHyperV.Api;
-using ExHyperV.Behaviors;
-using ExHyperV.Models;
-using ExHyperV.Services;
-using ExHyperV.Tools;
 using Wpf.Ui.Controls;
 
 namespace ExHyperV.ViewModels
@@ -192,7 +192,8 @@ namespace ExHyperV.ViewModels
             _uiTimer.Tick += (s, e) => { foreach (var vm in VmList) vm.TickUptime(); };
             _uiTimer.Start();
 
-            Task.Run(async () => {
+            Task.Run(async () =>
+            {
                 await Task.Delay(300);
                 Application.Current.Dispatcher.Invoke(() => LoadVmsCommand.Execute(null));
             });
@@ -920,7 +921,8 @@ namespace ExHyperV.ViewModels
             {
                 var list = await _vmBootService.GetBootOrderAsync(vm.Name);
 
-                Application.Current.Dispatcher.Invoke(() => {
+                Application.Current.Dispatcher.Invoke(() =>
+                {
                     vm.BootOrderItems.Clear();
                     foreach (var item in list)
                     {
@@ -961,7 +963,8 @@ namespace ExHyperV.ViewModels
             instance.IpAddress = vm.IpAddress;
 
             // 绑定电源控制命令 (必须绑定，否则新发现的 VM 按钮无效)
-            instance.ControlCommand = new AsyncRelayCommand<string>(async (action) => {
+            instance.ControlCommand = new AsyncRelayCommand<string>(async (action) =>
+            {
                 instance.SetTransientState(GetOptimisticText(action));
                 try
                 {
@@ -994,7 +997,8 @@ namespace ExHyperV.ViewModels
             IsLoading = true;
             try
             {
-                var finalCollection = await Task.Run(async () => {
+                var finalCollection = await Task.Run(async () =>
+                {
                     var vms = await _queryService.GetVmListAsync();
                     var list = new ObservableCollection<VmInstanceInfo>();
                     foreach (var vm in vms)
@@ -1017,7 +1021,8 @@ namespace ExHyperV.ViewModels
                         instance.SyncBackendData(vm.State, vm.RawUptime);
 
                         // 绑定电源控制命令
-                        instance.ControlCommand = new AsyncRelayCommand<string>(async (action) => {
+                        instance.ControlCommand = new AsyncRelayCommand<string>(async (action) =>
+                        {
                             instance.SetTransientState(GetOptimisticText(action));
                             try
                             {
@@ -1188,7 +1193,8 @@ namespace ExHyperV.ViewModels
                     await _queryService.UpdateDiskPerformanceAsync(VmList);
                     var gpuUsageMap = await _queryService.GetGpuPerformanceAsync(VmList);
 
-                    Application.Current.Dispatcher.Invoke(() => {
+                    Application.Current.Dispatcher.Invoke(() =>
+                    {
                         bool needsResort = false;
 
                         // --- A. 监测删除：移除本地列表中 已经不存在于后端 的 VM ---
@@ -1287,12 +1293,14 @@ namespace ExHyperV.ViewModels
                                     {
                                         if (!string.IsNullOrEmpty(adapter.MacAddress) && (adapter.IpAddresses == null || adapter.IpAddresses.Count == 0))
                                         {
-                                            _ = Task.Run(async () => {
+                                            _ = Task.Run(async () =>
+                                            {
                                                 try
                                                 {
                                                     string arpIp = await Utils.GetVmIpAddressAsync(vm.Name, adapter.MacAddress);
                                                     if (!string.IsNullOrEmpty(arpIp))
-                                                        Application.Current.Dispatcher.Invoke(() => {
+                                                        Application.Current.Dispatcher.Invoke(() =>
+                                                        {
                                                             adapter.IpAddresses = new List<string> { arpIp };
                                                             if (vm.IpAddress == "---" || string.IsNullOrWhiteSpace(vm.IpAddress)) vm.IpAddress = arpIp;
                                                         });
@@ -1393,7 +1401,8 @@ namespace ExHyperV.ViewModels
                 var freshData = allVms.FirstOrDefault(x => x.Name == vm.Name);
                 if (freshData != null)
                 {
-                    Application.Current.Dispatcher.Invoke(() => {
+                    Application.Current.Dispatcher.Invoke(() =>
+                    {
                         vm.SyncBackendData(freshData.State, freshData.RawUptime);
                         vm.Disks.Clear();
                         foreach (var disk in freshData.Disks) vm.Disks.Add(disk);
@@ -2430,7 +2439,8 @@ namespace ExHyperV.ViewModels
 
                 // 2. 关键步骤：使用 Dispatcher 确保 UI 已处理完 ItemsSource 的变更通知
                 // 使用 Loaded 优先级，这会等待 ComboBox 完成内部项的生成
-                Application.Current.Dispatcher.BeginInvoke(new Action(() => {
+                Application.Current.Dispatcher.BeginInvoke(new Action(() =>
+                {
 
                     // --- 强刷 [编号] ---
                     var targetNum = AvailableControllerNumbers.Contains(ctrlNum) ? ctrlNum : (AvailableControllerNumbers.Count > 0 ? AvailableControllerNumbers[0] : 0);
@@ -2632,7 +2642,8 @@ namespace ExHyperV.ViewModels
                 // IP 探测
                 if (SelectedVm.IsRunning)
                 {
-                    _ = Task.Run(async () => {
+                    _ = Task.Run(async () =>
+                    {
                         await _vmNetworkService.FillDynamicIpsAsync(SelectedVm.Name, SelectedVm.NetworkAdapters);
                     });
                 }
@@ -3029,7 +3040,8 @@ namespace ExHyperV.ViewModels
                     tempList.Add(assignment);
                 }
 
-                Application.Current.Dispatcher.Invoke(() => {
+                Application.Current.Dispatcher.Invoke(() =>
+                {
                     bool isHardwareSame = SelectedVm.AssignedGpus.Count == tempList.Count &&
                                          SelectedVm.AssignedGpus.Select(x => x.AdapterId)
                                                       .SequenceEqual(tempList.Select(x => x.AdapterId));
@@ -3079,7 +3091,8 @@ namespace ExHyperV.ViewModels
 
                 if (success)
                 {
-                    Application.Current.Dispatcher.Invoke(() => {
+                    Application.Current.Dispatcher.Invoke(() =>
+                    {
                         SelectedVm.AssignedGpus.Remove(itemToRemove);
                         if (SelectedVm.AssignedGpus.Count == 0)
                         {
@@ -3439,7 +3452,8 @@ namespace ExHyperV.ViewModels
                     SelectedHostGpu.Pname,
                     SelectedHostGpu.Manu,
                     partition,
-                    msg => {
+                    msg =>
+                    {
                         driveTask.Description = msg;
                         AppendLog(msg);
                     });
@@ -3611,13 +3625,15 @@ namespace ExHyperV.ViewModels
                 SelectedVm.Name,
                 SelectedLinuxScript,
                 creds,
-                msg => {
+                msg =>
+                {
                     if (msg.Contains("[STEP:"))
                     {
                         var match = System.Text.RegularExpressions.Regex.Match(msg, @"\[STEP:\s*(.*?)\]");
                         if (match.Success)
                         {
-                            Application.Current.Dispatcher.Invoke(() => {
+                            Application.Current.Dispatcher.Invoke(() =>
+                            {
                                 driveTask.Description = match.Groups[1].Value;
                             });
                         }
@@ -4013,7 +4029,8 @@ namespace ExHyperV.ViewModels
         private void ShowSnackbar(string title, string message, ControlAppearance appearance, SymbolRegular icon)
         {
             // 使用 Background 优先级，同时加上 async 支持 await 操作
-            Application.Current.Dispatcher.InvokeAsync(async () => {
+            Application.Current.Dispatcher.InvokeAsync(async () =>
+            {
                 var presenter = Application.Current.MainWindow?.FindName("SnackbarPresenter") as SnackbarPresenter;
                 if (presenter != null)
                 {
@@ -4072,7 +4089,8 @@ namespace ExHyperV.ViewModels
         {
             if (string.IsNullOrWhiteSpace(message)) return;
             string timestamp = DateTime.Now.ToString("HH:mm:ss");
-            Application.Current.Dispatcher.Invoke(() => {
+            Application.Current.Dispatcher.Invoke(() =>
+            {
                 GpuDeploymentLog += $"[{timestamp}] {message}{Environment.NewLine}";
             });
         }

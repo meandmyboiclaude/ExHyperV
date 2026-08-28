@@ -1,10 +1,9 @@
-﻿using System.Globalization;
-using CommunityToolkit.Mvvm.ComponentModel;
+﻿using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using ExHyperV.Services;
 using ExHyperV.Tools;
 using ExHyperV.Views.Pages;
-using System.Windows;
+using System.Globalization;
 
 namespace ExHyperV.ViewModels
 {

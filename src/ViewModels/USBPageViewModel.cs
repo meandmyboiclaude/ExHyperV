@@ -1,8 +1,8 @@
-using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using ExHyperV.Models;
 using ExHyperV.Services;
+using System.Collections.ObjectModel;
 using System.Diagnostics;
 
 namespace ExHyperV.ViewModels
@@ -116,7 +116,8 @@ namespace ExHyperV.ViewModels
                     deviceVM.CurrentAssignment = Properties.Resources.USBPageViewModel_Connecting;
 
                     // 2. 异步执行切换，内部会处理 Stop 旧隧道 -> Start 新隧道
-                    _ = Task.Run(async () => {
+                    _ = Task.Run(async () =>
+                    {
                         await _srv.AutoRecoverTunnel(deviceVM.BusId, selectedTarget);
                     });
                 }

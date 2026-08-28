@@ -1,11 +1,11 @@
+using MSTSCLib;
+using RoyalApps.Community.Rdp.WinForms.Configuration;
+using RoyalApps.Community.Rdp.WinForms.Controls;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Forms.Integration;
 using System.Windows.Interop;
 using System.Windows.Threading;
-using MSTSCLib;
-using RoyalApps.Community.Rdp.WinForms.Configuration;
-using RoyalApps.Community.Rdp.WinForms.Controls;
 using RdpColorDepth = RoyalApps.Community.Rdp.WinForms.Configuration.ColorDepth;
 using WinForms = System.Windows.Forms;
 
@@ -107,13 +107,15 @@ namespace ExHyperV.Tools
             _configDebounceTimer.Tick += (s, e) => { _configDebounceTimer.Stop(); _ = TriggerConnectAsync(); };
 
             _layoutStabilizeTimer = new DispatcherTimer(DispatcherPriority.Render) { Interval = TimeSpan.FromMilliseconds(10) };
-            _layoutStabilizeTimer.Tick += (s, e) => {
+            _layoutStabilizeTimer.Tick += (s, e) =>
+            {
                 if ((GetAsyncKeyState(0x01) & 0x8000) != 0) return;
                 _layoutStabilizeTimer.Stop();
                 ExecutePhysicalLayout(_pendingW, _pendingH);
             };
 
-            _rdpControl.OnConnected += (s, e) => {
+            _rdpControl.OnConnected += (s, e) =>
+            {
                 StopReconnectLoop();
                 var client = _rdpControl.RdpClient;
                 if (client == null) return;
@@ -125,7 +127,8 @@ namespace ExHyperV.Tools
                 OnRdpConnected?.Invoke();
             };
 
-            _rdpControl.OnDisconnected += (s, e) => {
+            _rdpControl.OnDisconnected += (s, e) =>
+            {
                 StopFastSniffer();
                 _layoutStabilizeTimer.Stop();
                 _curtain.Visible = true;
@@ -137,7 +140,8 @@ namespace ExHyperV.Tools
 
 
             this.Child = _winFormsContainer;
-            this.Loaded += (s, e) => {
+            this.Loaded += (s, e) =>
+            {
                 _parentWindow = Window.GetWindow(this);
                 if (_parentWindow != null)
                 {
@@ -148,7 +152,8 @@ namespace ExHyperV.Tools
                     _hwndSource?.AddHook(WndProc);
                 }
             };
-            this.Unloaded += (s, e) => {
+            this.Unloaded += (s, e) =>
+            {
                 if (_parentWindow != null) _parentWindow.Deactivated -= ParentWindow_Deactivated;
                 _hwndSource?.RemoveHook(WndProc);
                 _hwndSource = null;
@@ -321,7 +326,8 @@ namespace ExHyperV.Tools
                 if (_isUserResizingOrMoving) { _pendingW = w; _pendingH = h; _isLayoutPending = true; }
                 return;
             }
-            Dispatcher.Invoke(() => {
+            Dispatcher.Invoke(() =>
+            {
                 var source = PresentationSource.FromVisual(this);
                 if (source?.CompositionTarget == null || _parentWindow == null) return;
                 double dpiX = source.CompositionTarget.TransformToDevice.M11;
@@ -338,7 +344,8 @@ namespace ExHyperV.Tools
                     _parentWindow.SizeToContent = SizeToContent.Manual;
                     _parentWindow.InvalidateMeasure(); _parentWindow.UpdateLayout();
                     _parentWindow.SizeToContent = SizeToContent.WidthAndHeight;
-                    Dispatcher.BeginInvoke(new Action(() => {
+                    Dispatcher.BeginInvoke(new Action(() =>
+                    {
                         if (!_isUserResizingOrMoving) _parentWindow.SizeToContent = SizeToContent.Manual;
                     }), DispatcherPriority.Background);
                 }
@@ -348,7 +355,8 @@ namespace ExHyperV.Tools
         {
             if (_fastResizeTimer != null) return;
             _fastResizeTimer = new DispatcherTimer(DispatcherPriority.Render) { Interval = TimeSpan.FromMilliseconds(20) };
-            _fastResizeTimer.Tick += (s, e) => {
+            _fastResizeTimer.Tick += (s, e) =>
+            {
                 var client = _rdpControl.RdpClient;
                 if (client?.ConnectionState != RoyalApps.Community.Rdp.WinForms.Controls.ConnectionState.Connected) return;
 
@@ -364,7 +372,7 @@ namespace ExHyperV.Tools
                     {
                         if (_hookChangeConfirmCount == 0)
                         {
-                            _hookChangeConfirmCount = 1; 
+                            _hookChangeConfirmCount = 1;
                         }
                         else
                         {
